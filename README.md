@@ -12,7 +12,6 @@ A GPU-accelerated terminal extension for VS Code powered by [Ghostty's](https://
 - **Multi-tab support** in the panel view
 - **Theme integration** - automatically uses VS Code's color theme
 - **File path detection** - Ctrl/Cmd+click to open files from terminal output
-- **Drag and drop** - drop files into the terminal to paste their paths
 
 ## Installation
 
