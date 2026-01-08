@@ -179,7 +179,8 @@
 		"jscpd": "jscpd src --min-lines 10 --min-tokens 50",
 		"knip": "knip",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
 	},
 	"dependencies": {
 		"@0xbigboss/ghostty-web": "^0.4.0",
