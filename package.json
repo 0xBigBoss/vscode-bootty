@@ -2,7 +2,7 @@
 	"name": "vscode-ghostty",
 	"displayName": "Ghostty Terminal",
 	"description": "GPU-accelerated terminal for VS Code powered by Ghostty's renderer via WebAssembly",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"publisher": "bigboss",
 	"license": "MIT",
 	"icon": "images/icon.png",
