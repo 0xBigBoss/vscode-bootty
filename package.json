@@ -3,7 +3,7 @@
 	"displayName": "Ghostty Terminal",
 	"description": "GPU-accelerated terminal for VS Code powered by Ghostty's renderer via WebAssembly",
 	"version": "0.1.0",
-	"publisher": "0xbigboss",
+	"publisher": "bigboss",
 	"license": "MIT",
 	"icon": "images/icon.png",
 	"repository": {
