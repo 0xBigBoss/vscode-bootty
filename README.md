@@ -24,12 +24,16 @@ code --install-extension bigboss.vscode-ghostty
 
 ## Usage
 
-- **Toggle terminal panel**: `Ctrl+\`` (or `Cmd+\`` on macOS)
-- **New terminal**: `Ctrl+Shift+\`` (or `Cmd+Shift+\`` on macOS)
-- **New terminal in panel**: `Ctrl+Shift+T` (or `Cmd+Shift+T` on macOS)
-- **Next/previous tab**: `Ctrl+Shift+]` / `Ctrl+Shift+[` (or `Cmd+Shift+]` / `Cmd+Shift+[` on macOS)
+| Action | Windows/Linux | macOS |
+|--------|---------------|-------|
+| Toggle terminal panel | <kbd>Ctrl</kbd>+<kbd>`</kbd> | <kbd>Cmd</kbd>+<kbd>`</kbd> |
+| New terminal | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> |
+| New terminal in panel | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
+| Next tab | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>]</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>]</kbd> |
+| Previous tab | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> |
 
-You can also use the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`):
+You can also use the Command Palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>):
+
 - `Ghostty: New Terminal`
 - `Ghostty: New Terminal in Editor`
 - `Ghostty: New Terminal in Panel`
@@ -54,6 +58,11 @@ You can also use the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`):
 
 - [Ghostty](https://ghostty.org/) by Mitchell Hashimoto - The terminal emulator whose renderer powers this extension
 - [ghostty-web](https://github.com/coder/ghostty-web) by Coder - WebAssembly bindings for Ghostty's renderer
+
+## Related Repositories
+
+- [vscode-ghostty](https://github.com/0xBigBoss/vscode-ghostty) - This VS Code extension
+- [@0xbigboss/ghostty-web](https://github.com/0xBigBoss/ghostty-web) - Fork of ghostty-web with enhanced selection handling ([npm](https://www.npmjs.com/package/@0xbigboss/ghostty-web))
 
 ## License
 
