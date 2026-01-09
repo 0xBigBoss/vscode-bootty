@@ -1,6 +1,6 @@
-# Contributing to Ghostty Terminal
+# Contributing to BooTTY
 
-Thank you for your interest in contributing to the Ghostty Terminal VS Code extension!
+Thank you for your interest in contributing to the BooTTY VS Code extension!
 
 ## Development Setup
 
@@ -13,8 +13,8 @@ Thank you for your interest in contributing to the Ghostty Terminal VS Code exte
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/0xbigboss/ghostty-vscode.git
-   cd ghostty-vscode/ghostty-terminal
+   git clone https://github.com/0xBigBoss/vscode-bootty.git
+   cd vscode-bootty
    ```
 
 2. Install dependencies:
@@ -32,7 +32,7 @@ Thank you for your interest in contributing to the Ghostty Terminal VS Code exte
 ## Project Structure
 
 ```
-ghostty-terminal/
+vscode-bootty/
 ├── src/
 │   ├── extension.ts          # Extension entry point
 │   ├── terminal-manager.ts   # Terminal lifecycle management

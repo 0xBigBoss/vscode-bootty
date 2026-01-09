@@ -1,15 +1,36 @@
 # Changelog
 
-All notable changes to the Ghostty Terminal extension will be documented in this file.
+All notable changes to the BooTTY extension will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.2.0] - 2026-01-09
+
+### Changed
+- **BREAKING**: Rebranded from "Ghostty Terminal" to "BooTTY" per upstream feedback
+- All commands renamed from `ghostty.*` to `bootty.*`
+- All settings renamed from `ghostty.*` to `bootty.*`
+- New pirate-ghost terminal icon
+- `TERM_PROGRAM` now set to `bootty` instead of `ghostty_vscode`
+
+### Added
+- Performance disclaimer about unoptimized WASM builds
+- Alpine Linux (musl) support for native builds
+
+### Migration
+Users upgrading from v0.1.x need to update their settings:
+- `ghostty.fontFamily` → `bootty.fontFamily`
+- `ghostty.fontSize` → `bootty.fontSize`
+- `ghostty.defaultTerminalLocation` → `bootty.defaultTerminalLocation`
+- `ghostty.bell` → `bootty.bell`
+- `ghostty.notifications` → `bootty.notifications`
 
 ## [Unreleased]
 
 ### Added
 - OSC 9 notification support for terminal application notifications
-- Bell setting (`ghostty.bell`) to control visual/status notifications
+- Bell setting (`bootty.bell`) to control visual/status notifications
 - Keyboard shortcuts: `Ctrl+`` toggle panel, `Ctrl+Shift+`` new terminal
 - Tab navigation: `Cmd+Shift+[` / `Cmd+Shift+]` to switch tabs
 - `Cmd+Shift+T` opens new terminal in panel

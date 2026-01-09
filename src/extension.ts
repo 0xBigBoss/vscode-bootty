@@ -8,6 +8,49 @@ import type { TerminalLocation } from "./types/terminal";
 let manager: TerminalManager | undefined;
 let panelProvider: BooTTYPanelViewProvider | undefined;
 
+/** Check for deprecated ghostty.* settings and warn user */
+function checkDeprecatedSettings(): void {
+	const deprecatedSettings = [
+		"ghostty.fontFamily",
+		"ghostty.fontSize",
+		"ghostty.defaultTerminalLocation",
+		"ghostty.bell",
+		"ghostty.notifications",
+	];
+
+	const ghosttyConfig = vscode.workspace.getConfiguration("ghostty");
+	const foundSettings: string[] = [];
+
+	for (const setting of deprecatedSettings) {
+		const key = setting.replace("ghostty.", "");
+		const value = ghosttyConfig.inspect(key);
+		// Check if user has explicitly set this setting (not just default)
+		if (
+			value?.globalValue !== undefined ||
+			value?.workspaceValue !== undefined ||
+			value?.workspaceFolderValue !== undefined
+		) {
+			foundSettings.push(setting);
+		}
+	}
+
+	if (foundSettings.length > 0) {
+		vscode.window
+			.showWarningMessage(
+				`BooTTY: Found deprecated "ghostty.*" settings. Please migrate to "bootty.*" settings. Found: ${foundSettings.join(", ")}`,
+				"Open Settings",
+			)
+			.then((selection) => {
+				if (selection === "Open Settings") {
+					vscode.commands.executeCommand(
+						"workbench.action.openSettings",
+						"bootty",
+					);
+				}
+			});
+	}
+}
+
 /** Resolve cwd: ensure it's a directory, fallback to workspace or home */
 function resolveCwd(uri?: vscode.Uri): string | undefined {
 	if (!uri?.fsPath) {
@@ -35,6 +78,9 @@ function getDefaultLocation(): TerminalLocation {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+	// Check for deprecated ghostty.* settings and warn user
+	checkDeprecatedSettings();
+
 	// Create panel view provider
 	panelProvider = new BooTTYPanelViewProvider(context.extensionUri);
 

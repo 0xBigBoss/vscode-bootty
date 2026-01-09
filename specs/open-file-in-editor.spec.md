@@ -205,7 +205,7 @@ private async handleOpenFile(path: string, line?: number, column?: number): Prom
       );
     }
   } catch (error) {
-    console.warn(`[ghostty-terminal] Failed to open file: ${path}`, error);
+    console.warn(`[bootty] Failed to open file: ${path}`, error);
   }
 }
 

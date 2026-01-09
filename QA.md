@@ -1,8 +1,8 @@
-# QA Checklist - Ghostty Terminal Extension
+# QA Checklist - BooTTY Extension
 
 ## Prerequisites
 
-1. Open the `ghostty-terminal` folder in VS Code
+1. Open the `vscode-bootty` folder in VS Code
 2. Run `npm install` and `npm run build`
 3. Press `F5` to launch Extension Development Host
 
@@ -11,7 +11,7 @@
 ## 1. Basic Terminal Functionality
 
 ### 1.1 Terminal Creation
-- [ ] Run command `Ghostty: New Terminal` from Command Palette (Cmd/Ctrl+Shift+P)
+- [ ] Run command `BooTTY: New Terminal` from Command Palette (Cmd/Ctrl+Shift+P)
 - [ ] Terminal panel opens in editor area
 - [ ] Shell prompt appears within 2 seconds
 
@@ -22,7 +22,7 @@
 - [ ] Press Ctrl+D to exit cat
 
 ### 1.3 Environment
-- [ ] Run `echo $TERM_PROGRAM` → shows `ghostty`
+- [ ] Run `echo $TERM_PROGRAM` → shows `bootty`
 - [ ] Run `echo $COLORTERM` → shows `truecolor`
 - [ ] Run `echo $SHELL` → shows your default shell
 
@@ -63,16 +63,16 @@
 ## 3. Custom Fonts (#3)
 
 ### 3.1 Settings
-- [ ] Open Settings → search "ghostty"
-- [ ] `ghostty.fontFamily` and `ghostty.fontSize` settings appear
+- [ ] Open Settings → search "bootty"
+- [ ] `bootty.fontFamily` and `bootty.fontSize` settings appear
 
 ### 3.2 Font Family
-- [ ] Set `ghostty.fontFamily` to `"Courier New"` → font changes immediately
+- [ ] Set `bootty.fontFamily` to `"Courier New"` → font changes immediately
 - [ ] Clear setting → falls back to `terminal.integrated.fontFamily`
 - [ ] Clear both → falls back to monospace default
 
 ### 3.3 Font Size
-- [ ] Set `ghostty.fontSize` to `20` → font size increases
+- [ ] Set `bootty.fontSize` to `20` → font size increases
 - [ ] Verify terminal dimensions change (run `tput cols; tput lines`)
 - [ ] Set to `12` → font size decreases
 - [ ] Set to `0` → falls back to `terminal.integrated.fontSize`

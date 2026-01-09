@@ -2,12 +2,12 @@
 
 ## Overview
 
-Build native node-pty binaries for all major platforms using Docker, enabling vscode-ghostty to work on remote hosts (SSH, WSL, containers) without requiring compilation on the target machine.
+Build native node-pty binaries for all major platforms using Docker, enabling BooTTY to work on remote hosts (SSH, WSL, containers) without requiring compilation on the target machine.
 
 ## Problem
 
 - node-pty npm package only ships prebuilds for darwin (macOS) and win32 (Windows)
-- Linux requires compilation from source, which doesn't happen when VS Code extracts a vsix
+- Linux requires compilation from source, which doesn't happen when VS Code extracts a VSIX
 - Extension fails to activate on Linux remote hosts with "command not found" error
 
 ## Goals

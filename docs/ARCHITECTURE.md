@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the architecture of the Ghostty Terminal VS Code extension.
+This document describes the architecture of the BooTTY VS Code extension.
 
 ## Overview
 
@@ -129,12 +129,12 @@ The extension supports two terminal locations:
 ### Editor Terminals
 - Open in editor tab group
 - Each has its own `WebviewPanel`
-- Accessed via `ghostty.newTerminalInEditor`
+- Accessed via `bootty.newTerminalInEditor`
 
 ### Panel Terminals
 - Open in bottom panel (like built-in terminal)
 - Share single `WebviewView` with internal tabs
-- Accessed via `ghostty.newTerminalInPanel` or `ghostty.newTerminal`
+- Accessed via `bootty.newTerminalInPanel` or `bootty.newTerminal`
 
 ## Type System
 
@@ -194,11 +194,11 @@ Settings in `package.json`:
 
 | Setting | Description |
 |---------|-------------|
-| `ghostty.fontFamily` | Terminal font family |
-| `ghostty.fontSize` | Terminal font size |
-| `ghostty.defaultTerminalLocation` | Where new terminals open |
-| `ghostty.bell` | Bell notification style |
-| `ghostty.notifications` | Enable OSC 9 notifications |
+| `bootty.fontFamily` | Terminal font family |
+| `bootty.fontSize` | Terminal font size |
+| `bootty.defaultTerminalLocation` | Where new terminals open |
+| `bootty.bell` | Bell notification style |
+| `bootty.notifications` | Enable OSC 9 notifications |
 
 ## Security Considerations
 

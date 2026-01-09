@@ -1,11 +1,11 @@
 # SPEC: Keybinding Passthrough (#2)
 
 ## Goal
-Allow VS Code keybindings (Cmd+P, Cmd+Shift+P, Ctrl+`, etc.) to work while Ghostty Terminal is focused, matching VS Code's integrated terminal behavior.
+Allow VS Code keybindings (Cmd+P, Cmd+Shift+P, Ctrl+`, etc.) to work while BooTTY terminal is focused, matching VS Code's integrated terminal behavior.
 
 ## Current Problem
 
-ghostty-web's InputHandler captures all keyboard events with `preventDefault()`, blocking VS Code from seeing any keybindings when terminal has focus.
+The ghostty-web library's InputHandler captures all keyboard events with `preventDefault()`, blocking VS Code from seeing any keybindings when terminal has focus.
 
 ## Behavior Model: Match Integrated Terminal
 
@@ -140,13 +140,13 @@ Add settings for power users:
   "contributes": {
     "configuration": {
       "properties": {
-        "ghostty.terminalKeybindings": {
+        "bootty.terminalKeybindings": {
           "type": "array",
           "default": [],
           "items": { "type": "string" },
           "description": "Additional keybindings to capture in terminal (e.g., 'ctrl+p' to send to terminal instead of VS Code)"
         },
-        "ghostty.passthroughKeybindings": {
+        "bootty.passthroughKeybindings": {
           "type": "array",
           "default": [],
           "items": { "type": "string" },

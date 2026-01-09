@@ -1,7 +1,7 @@
 # SPEC: Custom Terminal Themes (#4)
 
 ## Goal
-Support VS Code's terminal color theming so Ghostty Terminal matches the user's active color theme.
+Support VS Code's terminal color theming so BooTTY matches the user's active color theme.
 
 ## Theme Source
 

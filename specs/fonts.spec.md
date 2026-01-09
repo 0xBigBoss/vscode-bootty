@@ -5,7 +5,7 @@ Allow users to configure terminal font family and size, with sensible defaults t
 
 ## Settings Priority
 
-1. `ghostty.fontFamily` / `ghostty.fontSize` (explicit override)
+1. `bootty.fontFamily` / `bootty.fontSize` (explicit override)
 2. `terminal.integrated.fontFamily` / `terminal.integrated.fontSize` (VS Code terminal default)
 3. ghostty-web default (`'monospace'` / `15`)
 
@@ -18,14 +18,14 @@ Add to `package.json`:
 {
   "contributes": {
     "configuration": {
-      "title": "Ghostty Terminal",
+      "title": "BooTTY",
       "properties": {
-        "ghostty.fontFamily": {
+        "bootty.fontFamily": {
           "type": "string",
           "default": "",
-          "description": "Font family for Ghostty Terminal. Leave empty to use terminal.integrated.fontFamily."
+          "description": "Font family for BooTTY. Leave empty to use terminal.integrated.fontFamily."
         },
-        "ghostty.fontSize": {
+        "bootty.fontSize": {
           "type": "number",
           "default": 0,
           "minimum": 6,
@@ -42,7 +42,7 @@ Add to `package.json`:
 
 ```typescript
 // types/settings.ts
-export interface GhosttyDisplaySettings {
+export interface BooTTYDisplaySettings {
   fontFamily: string;
   fontSize: number;
 }
@@ -52,15 +52,15 @@ export interface GhosttyDisplaySettings {
 
 ```typescript
 // settings.ts
-export function resolveDisplaySettings(): GhosttyDisplaySettings {
-  const ghosttyConfig = vscode.workspace.getConfiguration('ghostty');
+export function resolveDisplaySettings(): BooTTYDisplaySettings {
+  const boottyConfig = vscode.workspace.getConfiguration('bootty');
   const terminalConfig = vscode.workspace.getConfiguration('terminal.integrated');
 
-  const fontFamily = ghosttyConfig.get<string>('fontFamily') ||
+  const fontFamily = boottyConfig.get<string>('fontFamily') ||
                      terminalConfig.get<string>('fontFamily') ||
                      'monospace';
 
-  const fontSize = ghosttyConfig.get<number>('fontSize') ||
+  const fontSize = boottyConfig.get<number>('fontSize') ||
                    terminalConfig.get<number>('fontSize') ||
                    15;
 
