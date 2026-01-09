@@ -1,4 +1,4 @@
-# TODO - Ghostty Terminal Extension Implementation
+# TODO - BooTTY Extension Implementation
 
 ## Completed
 - [x] Phase 1: Project structure (package.json, tsconfig, esbuild.config.mjs) - iteration 1
@@ -12,13 +12,13 @@
 - [x] npm run build succeeds - iteration 1
 - [x] TypeScript type check passes (npx tsc --noEmit) - iteration 1
 - [x] Fix shell detection for macOS (fallback to /bin/zsh) - iteration 2
-- [x] Add TERM_PROGRAM=ghostty environment variable - iteration 2
+- [x] Add TERM_PROGRAM=bootty environment variable - iteration 2
 - [x] Manual VS Code Extension Development Host testing - iteration 2
   - [x] Extension activates without errors
-  - [x] "Ghostty: New Terminal" opens webview terminal
+  - [x] "BooTTY: New Terminal" opens webview terminal
   - [x] Shell prompt appears (PTY connected)
   - [x] Input echoes correctly
-  - [x] $TERM_PROGRAM shows "ghostty"
+  - [x] $TERM_PROGRAM shows "bootty"
   - [x] $COLORTERM shows "truecolor"
 - [x] #2 Keybinding Passthrough - Platform-specific: Mac (Cmd→VS Code, Ctrl→terminal), Win/Linux (Ctrl+Shift→VS Code, Ctrl+letter→terminal)
 - [x] #3 Custom Fonts - Settings (minimum: 6), hot reload with PTY resize notification
@@ -32,14 +32,14 @@
 - [x] Search in terminal (Cmd+F / Ctrl+F) with prev/next navigation - Ralph iteration
 - [x] Unit tests for path resolution, file cache, keybinding logic (63 tests) - Ralph iteration
 - [x] Panel-based terminals (bottom panel like VS Code built-in terminal) - Ralph iteration
-  - [x] Added `GhosttyPanelViewProvider` with WebviewViewProvider
+  - [x] Added `BooTTYPanelViewProvider` with WebviewViewProvider
   - [x] Created panel webview with tab bar (panel-main.ts, panel-template.html, panel-styles.css)
   - [x] Discriminated union types for EditorTerminalInstance vs PanelTerminalInstance
   - [x] Message protocol for panel-specific messages (add-tab, remove-tab, tab-activated, etc.)
   - [x] Location-based routing in terminal-manager.ts
-  - [x] Commands: ghostty.togglePanel, ghostty.newTerminalInEditor, ghostty.newTerminalInPanel
+  - [x] Commands: bootty.togglePanel, bootty.newTerminalInEditor, bootty.newTerminalInPanel
   - [x] Keybindings: ctrl+` (toggle panel), ctrl+shift+` (new terminal), ctrl+shift+t (new in editor)
-  - [x] Configuration: ghostty.defaultTerminalLocation (panel/editor)
+  - [x] Configuration: bootty.defaultTerminalLocation (panel/editor)
   - [x] Auto-create terminal when panel is empty on toggle
   - [x] Panel revealed before creating panel terminals (prevents timeout)
   - [x] State restoration preserves tab titles and active state
@@ -48,7 +48,7 @@
 (none)
 
 ## Bugs (from QA)
-- [x] **Font defaults wrong**: Fixed - now defaults to `editor.fontFamily`/`editor.fontSize`, overridable by `ghostty.*`
+- [x] **Font defaults wrong**: Fixed - now defaults to `editor.fontFamily`/`editor.fontSize`, overridable by `bootty.*`
 - [x] **Custom color schemes broken**: Fixed - MutationObserver now watches documentElement style changes
 - [x] **Keybindings captured by terminal**: Fixed in commit 28feb7d
 - [x] **Scrollback lost on window move**: Fixed - scrollback content extracted from buffer via `term.buffer.active.getLine()` API and persisted via getState/setState. Content restored with dim styling on webview recreation.
@@ -68,9 +68,9 @@
 - Build output: `out/extension.js`, `out/webview/main.js`, `out/webview/panel-main.js`, `out/webview/*.html`, `out/webview/*.css`
 - All 13 files created per plan at `.claude/plans/validated-crunching-pelican.md`
 - Shell detection improved to check VS Code settings, then $SHELL, then fallback to /bin/zsh
-- Terminal identifies as TERM_PROGRAM=ghostty, COLORTERM=truecolor
+- Terminal identifies as TERM_PROGRAM=bootty, COLORTERM=truecolor
 - Theme hot reload limitation: existing cell content keeps original colors (cells store RGB at write time)
-- Font/theme settings priority: ghostty.* > editor.* > defaults (fixed from terminal.integrated.*)
+- Font/theme settings priority: bootty.* > editor.* > defaults (fixed from terminal.integrated.*)
 - OSC 7 tracked per terminal instance for CWD-relative path resolution
 - Unit tests added for settings resolution, file cache, keybinding logic (73 tests via `npm test`)
 - Panel terminals use discriminated union types for type-safe access to location-specific fields

@@ -105,7 +105,7 @@ constructor(context: vscode.ExtensionContext) {
   // Listen for configuration changes
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(e => {
-      if (e.affectsConfiguration('ghostty') ||
+      if (e.affectsConfiguration('bootty') ||
           e.affectsConfiguration('terminal.integrated.fontFamily') ||
           e.affectsConfiguration('terminal.integrated.fontSize')) {
         this.broadcastSettingsUpdate();
@@ -186,8 +186,8 @@ PTY resized to new dimensions
 
 ## Testing
 
-1. Set `ghostty.fontFamily` to `"Fira Code"` -> terminal uses Fira Code
-2. Clear `ghostty.fontFamily`, set `terminal.integrated.fontFamily` to `"Monaco"` -> terminal uses Monaco
+1. Set `bootty.fontFamily` to `"Fira Code"` -> terminal uses Fira Code
+2. Clear `bootty.fontFamily`, set `terminal.integrated.fontFamily` to `"Monaco"` -> terminal uses Monaco
 3. Clear both -> terminal uses `monospace`
 4. Change font while terminal is open -> hot reload works
 5. Verify resize message sent after font change

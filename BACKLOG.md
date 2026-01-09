@@ -1,4 +1,4 @@
-# Backlog - Ghostty Terminal Extension
+# Backlog - BooTTY Extension
 
 ## Quick Wins
 
