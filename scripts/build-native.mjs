@@ -165,8 +165,8 @@ async function buildPlatform(platform, verbose) {
 		set -e
 		${config.deps}
 		cd /project/node_modules/node-pty
-		npm install node-addon-api 2>/dev/null || true
-		npm rebuild
+		rm -rf build
+		npx node-gyp rebuild
 		mkdir -p /project/node_modules/node-pty/prebuilds/${config.prebuildDir}
 		cp build/Release/pty.node /project/node_modules/node-pty/prebuilds/${config.prebuildDir}/
 		${chownCmd}

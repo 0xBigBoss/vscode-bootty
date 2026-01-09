@@ -48,10 +48,7 @@ jobs:
         shell: bash
         run: |
           ARGS=()
-          # Default to glibc-only builds (musl has relocation issues with node-pty)
-          if [ "$INPUT_PLATFORMS" = "all" ] || [ -z "$INPUT_PLATFORMS" ]; then
-            ARGS+=("--platform" "linux-x64,linux-arm64")
-          else
+          if [ "$INPUT_PLATFORMS" != "all" ] && [ -n "$INPUT_PLATFORMS" ]; then
             ARGS+=("--platform" "$INPUT_PLATFORMS")
           fi
           if [ "$INPUT_FORCE" = "true" ]; then
