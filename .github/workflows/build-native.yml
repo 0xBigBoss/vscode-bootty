@@ -16,6 +16,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-native:
     runs-on: ubuntu-latest
