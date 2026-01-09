@@ -1,0 +1,111 @@
+name: Build Native Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to build (comma-separated, or "all")'
+        required: false
+        default: 'all'
+      force:
+        description: 'Force rebuild even if cached'
+        type: boolean
+        required: false
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-native:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup QEMU for multi-arch builds
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build native binaries
+        env:
+          INPUT_PLATFORMS: ${{ github.event.inputs.platforms }}
+          INPUT_FORCE: ${{ github.event.inputs.force }}
+        shell: bash
+        run: |
+          ARGS=()
+          if [ "$INPUT_PLATFORMS" != "all" ] && [ -n "$INPUT_PLATFORMS" ]; then
+            ARGS+=("--platform" "$INPUT_PLATFORMS")
+          fi
+          if [ "$INPUT_FORCE" = "true" ]; then
+            ARGS+=("--force")
+          fi
+          ARGS+=("--verbose")
+          npm run build:native -- "${ARGS[@]}"
+
+      - name: Upload prebuilds artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-pty-prebuilds
+          path: node_modules/node-pty/prebuilds/linux-*
+          retention-days: 30
+
+  # On release tags, also build and publish the vsix
+  package:
+    needs: build-native
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download prebuilds
+        uses: actions/download-artifact@v4
+        with:
+          name: node-pty-prebuilds
+          path: node_modules/node-pty/prebuilds/
+
+      - name: Build extension
+        run: npm run build:prod
+
+      - name: Package vsix
+        run: npx @vscode/vsce package
+
+      - name: Upload vsix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: '*.vsix'
+          retention-days: 90
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: '*.vsix'
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

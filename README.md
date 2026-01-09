@@ -1,17 +1,34 @@
 # Ghostty Terminal for VS Code
 
-A GPU-accelerated terminal extension for VS Code powered by [Ghostty's](https://ghostty.org/) VT100 parser via WebAssembly.
+An alternative terminal extension for VS Code using [Ghostty's](https://ghostty.org/) VT100 parser via WebAssembly.
 
 > **Note**: This is an unofficial community extension. It is not affiliated with or endorsed by the Ghostty project.
 
 ## Features
 
-- **GPU-accelerated rendering** via Ghostty's WebGL renderer
-- **Real PTY integration** with full terminal emulation
-- **Panel and editor terminals** - open terminals in the bottom panel or as editor tabs
-- **Multi-tab support** in the panel view
-- **Theme integration** - automatically uses VS Code's color theme
+- **Ghostty's terminal emulation** - VT100/xterm escape sequence parsing via libghostty-vt WASM
+- **Real PTY integration** - Full terminal emulation with native shell support
+- **Panel and editor terminals** - Open terminals in the bottom panel or as editor tabs
+- **Multi-tab support** - Multiple terminal sessions in the panel view
+- **Theme integration** - Automatically uses VS Code's color theme
 - **File path detection** - Ctrl/Cmd+click to open files from terminal output
+
+## How It Works
+
+This extension uses two main components:
+
+1. **libghostty-vt (WASM)** - Ghostty's terminal emulation library handles:
+   - VT100/xterm escape sequence parsing
+   - Terminal state management (cells, cursor, scrollback)
+   - Unicode/grapheme handling
+   - Key encoding (Kitty protocol, xterm modifyOtherKeys)
+
+2. **Canvas2D Renderer (JavaScript)** - The extension renders the terminal using:
+   - HTML5 Canvas with 2D context
+   - Dirty line tracking for efficient updates
+   - VS Code theme color integration
+
+> **Note**: This extension uses Canvas2D rendering, not WebGL. GPU-accelerated WebGL rendering is a potential future enhancement.
 
 ## Installation
 
@@ -55,8 +72,8 @@ You can also use the Command Palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</k
 
 ## Credits
 
-- [Ghostty](https://ghostty.org/) by Mitchell Hashimoto - The terminal emulator whose renderer powers this extension
-- [ghostty-web](https://github.com/coder/ghostty-web) by Coder - WebAssembly bindings for Ghostty's renderer
+- [Ghostty](https://ghostty.org/) by Mitchell Hashimoto - The terminal emulator whose VT100 parser (libghostty-vt) powers this extension
+- [ghostty-web](https://github.com/coder/ghostty-web) by Coder - WebAssembly bindings and Canvas2D renderer for libghostty-vt
 
 ## Related Repositories
 

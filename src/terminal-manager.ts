@@ -70,6 +70,11 @@ function resolveTerminalTheme(): TerminalTheme {
 	};
 }
 
+/** Get the first workspace folder path, or undefined if none open */
+function getWorkspaceCwd(): string | undefined {
+	return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
 export class TerminalManager implements vscode.Disposable {
 	private terminals = new Map<TerminalId, TerminalInstance>();
 	private ptyService: PtyService;
@@ -258,10 +263,11 @@ export class TerminalManager implements vscode.Disposable {
 		makeActive: boolean,
 	): TerminalId | null {
 		const id = createTerminalId();
+		const cwd = getWorkspaceCwd();
 		const instance: PanelTerminalInstance = {
 			id,
 			location: "panel",
-			config: {},
+			config: { cwd },
 			ready: false,
 			dataQueue: [],
 			title,
@@ -269,7 +275,7 @@ export class TerminalManager implements vscode.Disposable {
 		this.terminals.set(id, instance);
 
 		// Spawn PTY
-		const spawnResult = this.spawnPty(id, {});
+		const spawnResult = this.spawnPty(id, { cwd });
 		if (!spawnResult.ok) {
 			this.terminals.delete(id);
 			return null;
@@ -336,7 +342,7 @@ export class TerminalManager implements vscode.Disposable {
 				this.destroyTerminal(message.terminalId);
 				break;
 			case "new-tab-requested":
-				this.createTerminal({ location: "panel" });
+				this.createTerminal({ location: "panel", cwd: getWorkspaceCwd() });
 				break;
 			case "new-tab-requested-with-title":
 				this.createPanelTerminalWithTitle(message.title, message.makeActive);

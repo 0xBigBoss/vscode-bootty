@@ -169,7 +169,7 @@
 		]
 	},
 	"scripts": {
-		"vscode:prepublish": "npm run build:prod",
+		"vscode:prepublish": "node scripts/check-prebuilds.mjs && npm run build:prod",
 		"compile": "tsgo -p ./",
 		"build": "node esbuild.config.mjs",
 		"build:prod": "NODE_ENV=production node esbuild.config.mjs",
@@ -183,6 +183,7 @@
 		"knip": "knip",
 		"test": "vitest run",
 		"test:watch": "vitest",
+		"build:native": "node scripts/build-native.mjs",
 		"postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
 	},
 	"dependencies": {
