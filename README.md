@@ -81,7 +81,7 @@ You can also use the Command Palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</k
 
 ## Related Repositories
 
-- [BooTTY](https://github.com/0xBigBoss/vscode-ghostty) - This VS Code extension
+- [BooTTY](https://github.com/0xBigBoss/vscode-bootty) - This VS Code extension
 - [@0xbigboss/ghostty-web](https://github.com/0xBigBoss/ghostty-web) - Fork of ghostty-web with enhanced selection handling ([npm](https://www.npmjs.com/package/@0xbigboss/ghostty-web))
 
 ## License

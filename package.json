@@ -8,12 +8,12 @@
 	"icon": "images/icon.png",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/0xBigBoss/vscode-ghostty.git"
+		"url": "https://github.com/0xBigBoss/vscode-bootty.git"
 	},
 	"bugs": {
-		"url": "https://github.com/0xBigBoss/vscode-ghostty/issues"
+		"url": "https://github.com/0xBigBoss/vscode-bootty/issues"
 	},
-	"homepage": "https://github.com/0xBigBoss/vscode-ghostty#readme",
+	"homepage": "https://github.com/0xBigBoss/vscode-bootty#readme",
 	"engines": {
 		"vscode": "^1.106.0"
 	},
