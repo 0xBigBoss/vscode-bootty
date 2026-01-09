@@ -2,7 +2,7 @@
 	"name": "vscode-ghostty",
 	"displayName": "Ghostty Terminal",
 	"description": "Alternative terminal for VS Code using Ghostty's VT100 parser via WebAssembly",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"publisher": "bigboss",
 	"license": "MIT",
 	"icon": "images/icon.png",
