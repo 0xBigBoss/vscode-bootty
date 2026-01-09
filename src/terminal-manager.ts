@@ -701,7 +701,12 @@ export class TerminalManager implements vscode.Disposable {
 		const instance = this.terminals.get(id);
 		if (!instance) return;
 
-		vscode.window.showErrorMessage(`Terminal error: ${error.message}`);
+		// "read EIO" is expected when PTY closes (shell exited) - don't show as error
+		const isExpectedClose =
+			error.message.includes("EIO") || error.message.includes("EOF");
+		if (!isExpectedClose) {
+			vscode.window.showErrorMessage(`Terminal error: ${error.message}`);
+		}
 		this.destroyTerminal(id);
 	}
 
