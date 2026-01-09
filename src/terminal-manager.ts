@@ -37,36 +37,65 @@ function getDisplaySettings() {
 	return resolveDisplaySettings(configGetter);
 }
 
-/** Get terminal theme colors from workbench.colorCustomizations */
+/** Get terminal theme colors from workbench.colorCustomizations with theme-scoped override support */
 function resolveTerminalTheme(): TerminalTheme {
 	const colorCustomizations =
 		vscode.workspace
 			.getConfiguration("workbench")
-			.get<Record<string, string>>("colorCustomizations") ?? {};
+			.get<Record<string, unknown>>("colorCustomizations") ?? {};
+
+	// Get current theme name for theme-scoped overrides (e.g., "[Monokai]": {...})
+	const currentThemeName = vscode.window.activeColorTheme?.label;
+
+	// Start with global color customizations (top-level keys without brackets)
+	const mergedColors: Record<string, string> = {};
+	for (const [key, value] of Object.entries(colorCustomizations)) {
+		if (typeof value === "string" && !key.startsWith("[")) {
+			mergedColors[key] = value;
+		}
+	}
+
+	// Apply theme-scoped overrides if current theme matches
+	if (currentThemeName) {
+		const themeScopedKey = `[${currentThemeName}]`;
+		const themeScopedColors = colorCustomizations[themeScopedKey];
+		if (themeScopedColors && typeof themeScopedColors === "object") {
+			for (const [key, value] of Object.entries(
+				themeScopedColors as Record<string, unknown>,
+			)) {
+				if (typeof value === "string") {
+					mergedColors[key] = value;
+				} else if (value === null) {
+					// null means "unset this color" - remove global override for this theme
+					delete mergedColors[key];
+				}
+			}
+		}
+	}
 
 	return {
-		foreground: colorCustomizations["terminal.foreground"],
-		background: colorCustomizations["terminal.background"],
-		cursor: colorCustomizations["terminal.cursor.foreground"],
-		cursorAccent: colorCustomizations["terminal.cursor.background"],
-		selectionBackground: colorCustomizations["terminal.selectionBackground"],
-		selectionForeground: colorCustomizations["terminal.selectionForeground"],
-		black: colorCustomizations["terminal.ansiBlack"],
-		red: colorCustomizations["terminal.ansiRed"],
-		green: colorCustomizations["terminal.ansiGreen"],
-		yellow: colorCustomizations["terminal.ansiYellow"],
-		blue: colorCustomizations["terminal.ansiBlue"],
-		magenta: colorCustomizations["terminal.ansiMagenta"],
-		cyan: colorCustomizations["terminal.ansiCyan"],
-		white: colorCustomizations["terminal.ansiWhite"],
-		brightBlack: colorCustomizations["terminal.ansiBrightBlack"],
-		brightRed: colorCustomizations["terminal.ansiBrightRed"],
-		brightGreen: colorCustomizations["terminal.ansiBrightGreen"],
-		brightYellow: colorCustomizations["terminal.ansiBrightYellow"],
-		brightBlue: colorCustomizations["terminal.ansiBrightBlue"],
-		brightMagenta: colorCustomizations["terminal.ansiBrightMagenta"],
-		brightCyan: colorCustomizations["terminal.ansiBrightCyan"],
-		brightWhite: colorCustomizations["terminal.ansiBrightWhite"],
+		foreground: mergedColors["terminal.foreground"],
+		background: mergedColors["terminal.background"],
+		cursor: mergedColors["terminal.cursor.foreground"],
+		cursorAccent: mergedColors["terminal.cursor.background"],
+		selectionBackground: mergedColors["terminal.selectionBackground"],
+		selectionForeground: mergedColors["terminal.selectionForeground"],
+		black: mergedColors["terminal.ansiBlack"],
+		red: mergedColors["terminal.ansiRed"],
+		green: mergedColors["terminal.ansiGreen"],
+		yellow: mergedColors["terminal.ansiYellow"],
+		blue: mergedColors["terminal.ansiBlue"],
+		magenta: mergedColors["terminal.ansiMagenta"],
+		cyan: mergedColors["terminal.ansiCyan"],
+		white: mergedColors["terminal.ansiWhite"],
+		brightBlack: mergedColors["terminal.ansiBrightBlack"],
+		brightRed: mergedColors["terminal.ansiBrightRed"],
+		brightGreen: mergedColors["terminal.ansiBrightGreen"],
+		brightYellow: mergedColors["terminal.ansiBrightYellow"],
+		brightBlue: mergedColors["terminal.ansiBrightBlue"],
+		brightMagenta: mergedColors["terminal.ansiBrightMagenta"],
+		brightCyan: mergedColors["terminal.ansiBrightCyan"],
+		brightWhite: mergedColors["terminal.ansiBrightWhite"],
 	};
 }
 
@@ -80,7 +109,7 @@ export class TerminalManager implements vscode.Disposable {
 	private ptyService: PtyService;
 	private context: vscode.ExtensionContext;
 	private panelProvider: BooTTYPanelViewProvider;
-	private terminalCounter = 0; // For generating tab titles
+	private usedIndices = new Set<number>(); // Track used indices for reuse
 
 	constructor(
 		context: vscode.ExtensionContext,
@@ -113,6 +142,23 @@ export class TerminalManager implements vscode.Disposable {
 				this.broadcastThemeUpdate();
 			}),
 		);
+	}
+
+	/** Get the next available terminal index (reuses freed indices) */
+	private getNextIndex(): number {
+		let index = 1;
+		while (this.usedIndices.has(index)) {
+			index++;
+		}
+		this.usedIndices.add(index);
+		return index;
+	}
+
+	/** Release a terminal index for reuse */
+	private releaseIndex(index: number | undefined): void {
+		if (index !== undefined) {
+			this.usedIndices.delete(index);
+		}
 	}
 
 	/** Type-safe message posting using discriminated union */
@@ -177,6 +223,7 @@ export class TerminalManager implements vscode.Disposable {
 		config?: Partial<TerminalConfig>,
 	): TerminalId | null {
 		const id = createTerminalId();
+		const index = this.getNextIndex();
 		const panel = createWebviewPanel(this.context.extensionUri, id);
 		const instance: EditorTerminalInstance = {
 			id,
@@ -185,7 +232,8 @@ export class TerminalManager implements vscode.Disposable {
 			panel,
 			ready: false,
 			dataQueue: [],
-			title: `Terminal ${++this.terminalCounter}`,
+			title: `Terminal ${index}`,
+			index,
 		};
 		this.terminals.set(id, instance);
 
@@ -201,6 +249,7 @@ export class TerminalManager implements vscode.Disposable {
 		if (!spawnResult.ok) {
 			panel.dispose();
 			this.terminals.delete(id);
+			this.releaseIndex(index);
 			return null;
 		}
 
@@ -224,7 +273,8 @@ export class TerminalManager implements vscode.Disposable {
 		config?: Partial<TerminalConfig>,
 	): TerminalId | null {
 		const id = createTerminalId();
-		const title = `Terminal ${++this.terminalCounter}`;
+		const index = this.getNextIndex();
+		const title = `Terminal ${index}`;
 		const instance: PanelTerminalInstance = {
 			id,
 			location: "panel",
@@ -232,6 +282,7 @@ export class TerminalManager implements vscode.Disposable {
 			ready: false,
 			dataQueue: [],
 			title,
+			index,
 		};
 		this.terminals.set(id, instance);
 
@@ -239,6 +290,7 @@ export class TerminalManager implements vscode.Disposable {
 		const spawnResult = this.spawnPty(id, config);
 		if (!spawnResult.ok) {
 			this.terminals.delete(id);
+			this.releaseIndex(index);
 			return null;
 		}
 
@@ -264,6 +316,14 @@ export class TerminalManager implements vscode.Disposable {
 	): TerminalId | null {
 		const id = createTerminalId();
 		const cwd = getWorkspaceCwd();
+
+		// Extract and reserve index from "Terminal N" pattern to avoid conflicts
+		const indexMatch = title.match(/^Terminal (\d+)$/);
+		const index = indexMatch ? parseInt(indexMatch[1], 10) : undefined;
+		if (index !== undefined) {
+			this.usedIndices.add(index);
+		}
+
 		const instance: PanelTerminalInstance = {
 			id,
 			location: "panel",
@@ -271,6 +331,7 @@ export class TerminalManager implements vscode.Disposable {
 			ready: false,
 			dataQueue: [],
 			title,
+			index,
 		};
 		this.terminals.set(id, instance);
 
@@ -278,6 +339,7 @@ export class TerminalManager implements vscode.Disposable {
 		const spawnResult = this.spawnPty(id, { cwd });
 		if (!spawnResult.ok) {
 			this.terminals.delete(id);
+			this.releaseIndex(index);
 			return null;
 		}
 
@@ -716,6 +778,9 @@ export class TerminalManager implements vscode.Disposable {
 		if (!instance) return; // Already destroyed
 		this.terminals.delete(id);
 
+		// Release index for reuse
+		this.releaseIndex(instance.index);
+
 		// Clear ready timeout if pending
 		if (instance.readyTimeout) {
 			clearTimeout(instance.readyTimeout);
@@ -732,6 +797,18 @@ export class TerminalManager implements vscode.Disposable {
 		} else {
 			// Panel: just remove the tab, do NOT dispose the panel WebviewView
 			this.panelProvider.removeTerminal(id);
+
+			// Auto-close panel when last terminal is closed, but only if BooTTY panel is visible
+			// (avoid closing unrelated panel views like Problems/Output)
+			const remainingPanelTerminals = [...this.terminals.values()].filter(
+				(t) => t.location === "panel",
+			);
+			if (
+				remainingPanelTerminals.length === 0 &&
+				this.panelProvider.isVisible
+			) {
+				vscode.commands.executeCommand("workbench.action.closePanel");
+			}
 		}
 	}
 

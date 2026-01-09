@@ -22,6 +22,7 @@ interface TerminalInstanceBase {
 	dataQueue: string[]; // Buffer PTY data until ready (capped)
 	currentCwd?: string; // Current working directory (tracked via OSC 7)
 	title: string; // User-editable tab title
+	index?: number; // Auto-assigned index for "Terminal N" naming (reused on close)
 }
 
 /** Editor terminals have their own WebviewPanel */
