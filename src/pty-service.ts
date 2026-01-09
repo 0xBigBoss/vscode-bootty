@@ -31,15 +31,14 @@ export class PtyService implements vscode.Disposable {
 		const terminalConfig = vscode.workspace.getConfiguration(
 			"terminal.integrated",
 		);
-		const profileKey =
-			process.platform === "darwin" ? "osx" : process.platform;
+		const profileKey = process.platform === "darwin" ? "osx" : process.platform;
 		const profileName = terminalConfig.get<string>(
 			`defaultProfile.${profileKey}`,
 		);
 		if (profileName) {
-			const profiles = terminalConfig.get<
-				Record<string, { path?: string }>
-			>(`profiles.${profileKey}`);
+			const profiles = terminalConfig.get<Record<string, { path?: string }>>(
+				`profiles.${profileKey}`,
+			);
 			const shellPath = profiles?.[profileName]?.path;
 			// Only use if the shell actually exists on this system
 			if (shellPath && fs.existsSync(shellPath)) {

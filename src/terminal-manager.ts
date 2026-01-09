@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { GhosttyPanelViewProvider } from "./panel-view-provider";
+import type { BooTTYPanelViewProvider } from "./panel-view-provider";
 import { PtyService } from "./pty-service";
 import {
 	createVSCodeConfigGetter,
@@ -79,12 +79,12 @@ export class TerminalManager implements vscode.Disposable {
 	private terminals = new Map<TerminalId, TerminalInstance>();
 	private ptyService: PtyService;
 	private context: vscode.ExtensionContext;
-	private panelProvider: GhosttyPanelViewProvider;
+	private panelProvider: BooTTYPanelViewProvider;
 	private terminalCounter = 0; // For generating tab titles
 
 	constructor(
 		context: vscode.ExtensionContext,
-		panelProvider: GhosttyPanelViewProvider,
+		panelProvider: BooTTYPanelViewProvider,
 	) {
 		this.context = context;
 		this.panelProvider = panelProvider;
@@ -94,7 +94,7 @@ export class TerminalManager implements vscode.Disposable {
 		context.subscriptions.push(
 			vscode.workspace.onDidChangeConfiguration((e) => {
 				if (
-					e.affectsConfiguration("ghostty") ||
+					e.affectsConfiguration("bootty") ||
 					e.affectsConfiguration("editor.fontFamily") ||
 					e.affectsConfiguration("editor.fontSize")
 				) {
@@ -160,7 +160,7 @@ export class TerminalManager implements vscode.Disposable {
 	/** Get runtime config from VS Code settings */
 	private getRuntimeConfig(): RuntimeConfig {
 		const bellStyle = vscode.workspace
-			.getConfiguration("ghostty")
+			.getConfiguration("bootty")
 			.get<"visual" | "none">("bell", "visual");
 		return { bellStyle };
 	}
@@ -442,7 +442,7 @@ export class TerminalManager implements vscode.Disposable {
 	/** Show VS Code notification for OSC 9 message */
 	private handleOSC9Notification(message: string): void {
 		const enabled = vscode.workspace
-			.getConfiguration("ghostty")
+			.getConfiguration("bootty")
 			.get<boolean>("notifications", true);
 		if (!enabled) return;
 
@@ -573,14 +573,14 @@ export class TerminalManager implements vscode.Disposable {
 		try {
 			uri = vscode.Uri.parse(url, true); // strict mode
 		} catch {
-			console.warn(`[ghostty-terminal] Invalid URL: ${url}`);
+			console.warn(`[bootty] Invalid URL: ${url}`);
 			return;
 		}
 
 		// Security: only allow safe schemes (prevent command:, vscode:, file: etc.)
 		if (!TerminalManager.ALLOWED_URL_SCHEMES.has(uri.scheme)) {
 			console.warn(
-				`[ghostty-terminal] Blocked URL with disallowed scheme: ${uri.scheme}`,
+				`[bootty] Blocked URL with disallowed scheme: ${uri.scheme}`,
 			);
 			return;
 		}
@@ -589,11 +589,11 @@ export class TerminalManager implements vscode.Disposable {
 		vscode.env.openExternal(uri).then(
 			(success) => {
 				if (!success) {
-					console.warn(`[ghostty-terminal] Failed to open URL: ${url}`);
+					console.warn(`[bootty] Failed to open URL: ${url}`);
 				}
 			},
 			(error) => {
-				console.error(`[ghostty-terminal] Error opening URL: ${error}`);
+				console.error(`[bootty] Error opening URL: ${error}`);
 			},
 		);
 	}
@@ -620,7 +620,7 @@ export class TerminalManager implements vscode.Disposable {
 				);
 			}
 		} catch (error) {
-			console.warn(`[ghostty-terminal] Failed to open file: ${path}`, error);
+			console.warn(`[bootty] Failed to open file: ${path}`, error);
 		}
 	}
 
@@ -657,7 +657,7 @@ export class TerminalManager implements vscode.Disposable {
 
 		// Check bell setting
 		const bellStyle = vscode.workspace
-			.getConfiguration("ghostty")
+			.getConfiguration("bootty")
 			.get<string>("bell", "visual");
 		if (bellStyle === "none") return;
 

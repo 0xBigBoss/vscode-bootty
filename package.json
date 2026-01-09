@@ -1,8 +1,8 @@
 {
-	"name": "vscode-ghostty",
-	"displayName": "Ghostty Terminal",
-	"description": "Alternative terminal for VS Code using Ghostty's VT100 parser via WebAssembly",
-	"version": "0.1.6",
+	"name": "bootty",
+	"displayName": "BooTTY",
+	"description": "Alternative terminal for VS Code powered by Ghostty's terminal emulation (libghostty-vt) via WebAssembly",
+	"version": "0.2.0",
 	"publisher": "bigboss",
 	"license": "MIT",
 	"icon": "images/icon.png",
@@ -25,30 +25,30 @@
 		"Programming Languages"
 	],
 	"activationEvents": [
-		"onView:ghosttyTerminalPanel",
-		"onCommand:ghostty.newTerminal",
-		"onCommand:ghostty.newTerminalInEditor",
-		"onCommand:ghostty.newTerminalInPanel",
-		"onCommand:ghostty.togglePanel",
-		"onCommand:ghostty.newTerminalHere",
-		"onCommand:ghostty.nextTab",
-		"onCommand:ghostty.previousTab"
+		"onView:boottyTerminalPanel",
+		"onCommand:bootty.newTerminal",
+		"onCommand:bootty.newTerminalInEditor",
+		"onCommand:bootty.newTerminalInPanel",
+		"onCommand:bootty.togglePanel",
+		"onCommand:bootty.newTerminalHere",
+		"onCommand:bootty.nextTab",
+		"onCommand:bootty.previousTab"
 	],
 	"main": "./out/extension.js",
 	"contributes": {
 		"viewsContainers": {
 			"panel": [
 				{
-					"id": "ghostty-terminal-panel",
-					"title": "Ghostty",
+					"id": "bootty-terminal-panel",
+					"title": "BooTTY",
 					"icon": "$(terminal)"
 				}
 			]
 		},
 		"views": {
-			"ghostty-terminal-panel": [
+			"bootty-terminal-panel": [
 				{
-					"id": "ghosttyTerminalPanel",
+					"id": "boottyTerminalPanel",
 					"name": "Terminal",
 					"type": "webview"
 				}
@@ -56,58 +56,58 @@
 		},
 		"commands": [
 			{
-				"command": "ghostty.newTerminal",
-				"title": "Ghostty: New Terminal"
+				"command": "bootty.newTerminal",
+				"title": "BooTTY: New Terminal"
 			},
 			{
-				"command": "ghostty.newTerminalInEditor",
-				"title": "Ghostty: New Terminal in Editor"
+				"command": "bootty.newTerminalInEditor",
+				"title": "BooTTY: New Terminal in Editor"
 			},
 			{
-				"command": "ghostty.newTerminalInPanel",
-				"title": "Ghostty: New Terminal in Panel"
+				"command": "bootty.newTerminalInPanel",
+				"title": "BooTTY: New Terminal in Panel"
 			},
 			{
-				"command": "ghostty.togglePanel",
-				"title": "Ghostty: Toggle Terminal Panel"
+				"command": "bootty.togglePanel",
+				"title": "BooTTY: Toggle Terminal Panel"
 			},
 			{
-				"command": "ghostty.newTerminalHere",
-				"title": "Ghostty: New Terminal Here"
+				"command": "bootty.newTerminalHere",
+				"title": "BooTTY: New Terminal Here"
 			},
 			{
-				"command": "ghostty.nextTab",
-				"title": "Ghostty: Next Terminal Tab"
+				"command": "bootty.nextTab",
+				"title": "BooTTY: Next Terminal Tab"
 			},
 			{
-				"command": "ghostty.previousTab",
-				"title": "Ghostty: Previous Terminal Tab"
+				"command": "bootty.previousTab",
+				"title": "BooTTY: Previous Terminal Tab"
 			}
 		],
 		"menus": {
 			"explorer/context": [
 				{
-					"command": "ghostty.newTerminalHere",
+					"command": "bootty.newTerminalHere",
 					"group": "navigation"
 				}
 			]
 		},
 		"configuration": {
-			"title": "Ghostty Terminal",
+			"title": "BooTTY",
 			"properties": {
-				"ghostty.fontFamily": {
+				"bootty.fontFamily": {
 					"type": "string",
 					"default": "",
-					"description": "Font family for Ghostty Terminal. Leave empty to use editor.fontFamily."
+					"description": "Font family for BooTTY. Leave empty to use editor.fontFamily."
 				},
-				"ghostty.fontSize": {
+				"bootty.fontSize": {
 					"type": "number",
 					"default": 0,
 					"minimum": 6,
 					"maximum": 72,
 					"description": "Font size in pixels. Set to 0 to use editor.fontSize."
 				},
-				"ghostty.defaultTerminalLocation": {
+				"bootty.defaultTerminalLocation": {
 					"type": "string",
 					"enum": [
 						"panel",
@@ -116,7 +116,7 @@
 					"default": "panel",
 					"description": "Where new terminals open by default"
 				},
-				"ghostty.bell": {
+				"bootty.bell": {
 					"type": "string",
 					"enum": [
 						"visual",
@@ -125,7 +125,7 @@
 					"default": "visual",
 					"description": "Bell notification style. 'visual' shows a flash and status bar notification, 'none' disables all bell feedback."
 				},
-				"ghostty.notifications": {
+				"bootty.notifications": {
 					"type": "boolean",
 					"default": true,
 					"description": "Show VS Code notifications from terminal applications (OSC 9 escape sequences)."
@@ -142,29 +142,29 @@
 				"key": "ctrl+shift+`"
 			},
 			{
-				"command": "ghostty.togglePanel",
+				"command": "bootty.togglePanel",
 				"key": "ctrl+`"
 			},
 			{
-				"command": "ghostty.newTerminal",
+				"command": "bootty.newTerminal",
 				"key": "ctrl+shift+`"
 			},
 			{
-				"command": "ghostty.newTerminalInPanel",
+				"command": "bootty.newTerminalInPanel",
 				"key": "ctrl+shift+t",
 				"mac": "cmd+shift+t"
 			},
 			{
-				"command": "ghostty.nextTab",
+				"command": "bootty.nextTab",
 				"key": "ctrl+shift+]",
 				"mac": "cmd+shift+]",
-				"when": "focusedView == 'ghosttyTerminalPanel'"
+				"when": "focusedView == 'boottyTerminalPanel'"
 			},
 			{
-				"command": "ghostty.previousTab",
+				"command": "bootty.previousTab",
 				"key": "ctrl+shift+[",
 				"mac": "cmd+shift+[",
-				"when": "focusedView == 'ghosttyTerminalPanel'"
+				"when": "focusedView == 'boottyTerminalPanel'"
 			}
 		]
 	},

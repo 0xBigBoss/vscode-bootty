@@ -11,11 +11,11 @@ import type { PanelTab, TerminalId } from "./types/terminal";
 export type PanelMessageHandler = (message: PanelWebviewMessage) => void;
 
 /**
- * WebviewViewProvider for the Ghostty terminal panel in the bottom area.
+ * WebviewViewProvider for the BooTTY terminal panel in the bottom area.
  * Manages multiple terminal tabs within a single WebviewView.
  */
-export class GhosttyPanelViewProvider implements vscode.WebviewViewProvider {
-	public static readonly viewType = "ghosttyTerminalPanel";
+export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
+	public static readonly viewType = "boottyTerminalPanel";
 
 	private _view?: vscode.WebviewView;
 	private _isReady = false; // True after panel-ready received
@@ -114,7 +114,7 @@ export class GhosttyPanelViewProvider implements vscode.WebviewViewProvider {
 					}
 					// Handle toggle-panel-requested by executing the toggle command
 					if (message.type === "toggle-panel-requested") {
-						vscode.commands.executeCommand("ghostty.togglePanel");
+						vscode.commands.executeCommand("bootty.togglePanel");
 						return;
 					}
 					// Route all messages to the handler
@@ -196,7 +196,7 @@ export class GhosttyPanelViewProvider implements vscode.WebviewViewProvider {
 	/** Show the panel view */
 	async show(): Promise<void> {
 		await vscode.commands.executeCommand(
-			`${GhosttyPanelViewProvider.viewType}.focus`,
+			`${BooTTYPanelViewProvider.viewType}.focus`,
 		);
 	}
 

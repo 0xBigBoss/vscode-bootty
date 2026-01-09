@@ -54,8 +54,8 @@ export function createWebviewPanel(
 	terminalId: TerminalId,
 ): vscode.WebviewPanel {
 	const panel = vscode.window.createWebviewPanel(
-		"ghosttyTerminal",
-		`Ghostty Terminal`,
+		"boottyTerminal",
+		`BooTTY`,
 		vscode.ViewColumn.One,
 		{
 			enableScripts: true,

@@ -1,12 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { GhosttyPanelViewProvider } from "./panel-view-provider";
+import { BooTTYPanelViewProvider } from "./panel-view-provider";
 import { TerminalManager } from "./terminal-manager";
 import type { TerminalLocation } from "./types/terminal";
 
 let manager: TerminalManager | undefined;
-let panelProvider: GhosttyPanelViewProvider | undefined;
+let panelProvider: BooTTYPanelViewProvider | undefined;
 
 /** Resolve cwd: ensure it's a directory, fallback to workspace or home */
 function resolveCwd(uri?: vscode.Uri): string | undefined {
@@ -30,13 +30,13 @@ function resolveCwd(uri?: vscode.Uri): string | undefined {
 
 /** Get default terminal location from settings */
 function getDefaultLocation(): TerminalLocation {
-	const config = vscode.workspace.getConfiguration("ghostty");
+	const config = vscode.workspace.getConfiguration("bootty");
 	return config.get<TerminalLocation>("defaultTerminalLocation", "panel");
 }
 
 export function activate(context: vscode.ExtensionContext) {
 	// Create panel view provider
-	panelProvider = new GhosttyPanelViewProvider(context.extensionUri);
+	panelProvider = new BooTTYPanelViewProvider(context.extensionUri);
 
 	// Create terminal manager with panel provider
 	manager = new TerminalManager(context, panelProvider);
@@ -50,7 +50,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register panel view provider
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(
-			GhosttyPanelViewProvider.viewType,
+			BooTTYPanelViewProvider.viewType,
 			panelProvider,
 			{
 				webviewOptions: {
@@ -75,12 +75,12 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register commands
 	context.subscriptions.push(
 		// New terminal (respects defaultTerminalLocation setting)
-		vscode.commands.registerCommand("ghostty.newTerminal", async () => {
+		vscode.commands.registerCommand("bootty.newTerminal", async () => {
 			await createTerminalWithLocation(getDefaultLocation(), resolveCwd());
 		}),
 
 		// New terminal in editor (explicit)
-		vscode.commands.registerCommand("ghostty.newTerminalInEditor", () =>
+		vscode.commands.registerCommand("bootty.newTerminalInEditor", () =>
 			manager!.createTerminal({
 				cwd: resolveCwd(),
 				location: "editor",
@@ -88,12 +88,12 @@ export function activate(context: vscode.ExtensionContext) {
 		),
 
 		// New terminal in panel (explicit)
-		vscode.commands.registerCommand("ghostty.newTerminalInPanel", async () => {
+		vscode.commands.registerCommand("bootty.newTerminalInPanel", async () => {
 			await createTerminalWithLocation("panel", resolveCwd());
 		}),
 
 		// Toggle panel (show/hide, auto-create terminal if empty)
-		vscode.commands.registerCommand("ghostty.togglePanel", async () => {
+		vscode.commands.registerCommand("bootty.togglePanel", async () => {
 			if (panelProvider!.isVisible) {
 				// Hide the panel
 				await vscode.commands.executeCommand("workbench.action.closePanel");
@@ -114,17 +114,17 @@ export function activate(context: vscode.ExtensionContext) {
 
 		// New terminal here (from explorer context menu)
 		vscode.commands.registerCommand(
-			"ghostty.newTerminalHere",
+			"bootty.newTerminalHere",
 			async (uri?: vscode.Uri) => {
 				await createTerminalWithLocation(getDefaultLocation(), resolveCwd(uri));
 			},
 		),
 
 		// Tab navigation
-		vscode.commands.registerCommand("ghostty.nextTab", () => {
+		vscode.commands.registerCommand("bootty.nextTab", () => {
 			panelProvider?.nextTab();
 		}),
-		vscode.commands.registerCommand("ghostty.previousTab", () => {
+		vscode.commands.registerCommand("bootty.previousTab", () => {
 			panelProvider?.previousTab();
 		}),
 	);

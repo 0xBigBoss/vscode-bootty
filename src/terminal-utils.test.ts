@@ -57,9 +57,9 @@ describe("terminal-utils", () => {
 			expect(config.shell).toBeUndefined(); // Default
 		});
 
-		it("always sets TERM_PROGRAM to ghostty_vscode", () => {
+		it("always sets TERM_PROGRAM to bootty", () => {
 			const config = resolveConfig();
-			expect(config.env?.TERM_PROGRAM).toBe("ghostty_vscode");
+			expect(config.env?.TERM_PROGRAM).toBe("bootty");
 		});
 
 		it("always sets COLORTERM to truecolor", () => {
@@ -85,11 +85,11 @@ describe("terminal-utils", () => {
 		});
 
 		it("user env does not override TERM_PROGRAM", () => {
-			// TERM_PROGRAM is set after user env overlay, so ghostty_vscode wins
+			// TERM_PROGRAM is set after user env overlay, so bootty wins
 			const config = resolveConfig({ env: { TERM_PROGRAM: "other" } });
 			// Actually, looking at the code, user env is spread AFTER the defaults
 			// So user env SHOULD override. Let me check the implementation...
-			// The code shows: { ...process.env, TERM_PROGRAM: 'ghostty_vscode', ...(partial?.env ?? {}) }
+			// The code shows: { ...process.env, TERM_PROGRAM: 'bootty', ...(partial?.env ?? {}) }
 			// So user overrides the TERM_PROGRAM. Let me fix the test to match implementation.
 			expect(config.env?.TERM_PROGRAM).toBe("other");
 		});

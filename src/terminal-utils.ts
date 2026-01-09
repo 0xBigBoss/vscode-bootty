@@ -22,10 +22,10 @@ export function resolveConfig(
 	return {
 		...DEFAULT_CONFIG,
 		...partial,
-		// Merge env: start with process.env, add Ghostty identification, overlay user overrides
+		// Merge env: start with process.env, add BooTTY identification, overlay user overrides
 		env: {
 			...process.env,
-			TERM_PROGRAM: "ghostty_vscode",
+			TERM_PROGRAM: "bootty",
 			TERM_PROGRAM_VERSION: "0.4.0", // ghostty-web version
 			COLORTERM: "truecolor",
 			...(partial?.env ?? {}),

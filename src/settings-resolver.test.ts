@@ -16,9 +16,9 @@ function createMockConfig(
 
 describe("resolveDisplaySettings", () => {
 	describe("fontFamily priority", () => {
-		it("uses ghostty.fontFamily when set", () => {
+		it("uses bootty.fontFamily when set", () => {
 			const config = createMockConfig({
-				ghostty: { fontFamily: "JetBrains Mono" },
+				bootty: { fontFamily: "JetBrains Mono" },
 				editor: { fontFamily: "Consolas" },
 			});
 
@@ -26,9 +26,9 @@ describe("resolveDisplaySettings", () => {
 			expect(settings.fontFamily).toBe("JetBrains Mono");
 		});
 
-		it("falls back to editor.fontFamily when ghostty not set", () => {
+		it("falls back to editor.fontFamily when bootty not set", () => {
 			const config = createMockConfig({
-				ghostty: {},
+				bootty: {},
 				editor: { fontFamily: "Consolas" },
 			});
 
@@ -38,7 +38,7 @@ describe("resolveDisplaySettings", () => {
 
 		it("falls back to monospace when neither set", () => {
 			const config = createMockConfig({
-				ghostty: {},
+				bootty: {},
 				editor: {},
 			});
 
@@ -46,9 +46,9 @@ describe("resolveDisplaySettings", () => {
 			expect(settings.fontFamily).toBe("monospace");
 		});
 
-		it("uses ghostty even when editor is set", () => {
+		it("uses bootty even when editor is set", () => {
 			const config = createMockConfig({
-				ghostty: { fontFamily: "Fira Code" },
+				bootty: { fontFamily: "Fira Code" },
 				editor: { fontFamily: "Courier New" },
 			});
 
@@ -58,9 +58,9 @@ describe("resolveDisplaySettings", () => {
 	});
 
 	describe("fontSize priority", () => {
-		it("uses ghostty.fontSize when set", () => {
+		it("uses bootty.fontSize when set", () => {
 			const config = createMockConfig({
-				ghostty: { fontSize: 16 },
+				bootty: { fontSize: 16 },
 				editor: { fontSize: 14 },
 			});
 
@@ -68,9 +68,9 @@ describe("resolveDisplaySettings", () => {
 			expect(settings.fontSize).toBe(16);
 		});
 
-		it("falls back to editor.fontSize when ghostty not set", () => {
+		it("falls back to editor.fontSize when bootty not set", () => {
 			const config = createMockConfig({
-				ghostty: {},
+				bootty: {},
 				editor: { fontSize: 14 },
 			});
 
@@ -80,7 +80,7 @@ describe("resolveDisplaySettings", () => {
 
 		it("falls back to 15 when neither set", () => {
 			const config = createMockConfig({
-				ghostty: {},
+				bootty: {},
 				editor: {},
 			});
 
@@ -90,7 +90,7 @@ describe("resolveDisplaySettings", () => {
 
 		it("treats 0 as unset (falsy)", () => {
 			const config = createMockConfig({
-				ghostty: { fontSize: 0 },
+				bootty: { fontSize: 0 },
 				editor: { fontSize: 12 },
 			});
 
@@ -102,7 +102,7 @@ describe("resolveDisplaySettings", () => {
 	describe("combined settings", () => {
 		it("resolves font family and size independently", () => {
 			const config = createMockConfig({
-				ghostty: { fontSize: 18 }, // Only size from ghostty
+				bootty: { fontSize: 18 }, // Only size from bootty
 				editor: { fontFamily: "Monaco", fontSize: 12 }, // Family from editor
 			});
 

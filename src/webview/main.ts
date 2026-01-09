@@ -425,7 +425,7 @@ interface WebviewState {
 				});
 			} catch (err) {
 				// ghostty-web WASM can crash during resize while rendering
-				console.warn("[ghostty-terminal] Resize error (WASM bug):", err);
+				console.warn("[bootty] Resize error (WASM bug):", err);
 			}
 		}, RESIZE_DEBOUNCE_MS);
 	});

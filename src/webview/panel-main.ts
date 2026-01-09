@@ -394,7 +394,7 @@ interface PanelTerminal {
 							rows: term.rows,
 						});
 					} catch (err) {
-						console.warn("[ghostty-terminal] Resize error:", err);
+						console.warn("[bootty] Resize error:", err);
 					}
 				}
 			}, 150);
@@ -487,7 +487,7 @@ interface PanelTerminal {
 					} satisfies PanelWebviewMessage);
 					term.focus?.();
 				} catch (err) {
-					console.warn("[ghostty-terminal] Fit error:", err);
+					console.warn("[bootty] Fit error:", err);
 				}
 			});
 		});
@@ -619,7 +619,7 @@ interface PanelTerminal {
 								rows: term.rows,
 							});
 						} catch (err) {
-							console.warn("[ghostty-terminal] Fit error:", err);
+							console.warn("[bootty] Fit error:", err);
 						}
 					});
 				});

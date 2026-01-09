@@ -1,8 +1,12 @@
-# Ghostty Terminal for VS Code
+# BooTTY
 
-An alternative terminal extension for VS Code using [Ghostty's](https://ghostty.org/) VT100 parser via WebAssembly.
+An alternative terminal extension for VS Code powered by [Ghostty's](https://ghostty.org/) terminal emulation (libghostty-vt) via WebAssembly.
 
-> **Note**: This is an unofficial community extension. It is not affiliated with or endorsed by the Ghostty project.
+*Pronounced "Boo-T-T-Y"* 👻
+
+> **Note**: This is an unofficial community project. It is not affiliated with or endorsed by the Ghostty project.
+
+> **Performance**: The underlying ghostty-web library and WASM builds have not been optimized for web/VS Code environments. Performance may not match native terminal emulators. This is expected and improvements are ongoing upstream.
 
 ## Features
 
@@ -32,10 +36,10 @@ This extension uses two main components:
 
 ## Installation
 
-Search for "Ghostty Terminal" in the VS Code extensions marketplace, or install from the command line:
+Search for "BooTTY" in the VS Code extensions marketplace, or install from the command line:
 
 ```bash
-code --install-extension bigboss.vscode-ghostty
+code --install-extension bigboss.bootty
 ```
 
 ## Usage
@@ -50,20 +54,20 @@ code --install-extension bigboss.vscode-ghostty
 
 You can also use the Command Palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>):
 
-- `Ghostty: New Terminal`
-- `Ghostty: New Terminal in Editor`
-- `Ghostty: New Terminal in Panel`
-- `Ghostty: Toggle Terminal Panel`
+- `BooTTY: New Terminal`
+- `BooTTY: New Terminal in Editor`
+- `BooTTY: New Terminal in Panel`
+- `BooTTY: Toggle Terminal Panel`
 
 ## Configuration
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `ghostty.fontFamily` | `""` | Font family (empty = use editor font) |
-| `ghostty.fontSize` | `0` | Font size in pixels (0 = use editor size) |
-| `ghostty.defaultTerminalLocation` | `"panel"` | Where new terminals open (`"panel"` or `"editor"`) |
-| `ghostty.bell` | `"visual"` | Bell style (`"visual"` or `"none"`) |
-| `ghostty.notifications` | `true` | Show notifications from terminal apps (OSC 9) |
+| `bootty.fontFamily` | `""` | Font family (empty = use editor font) |
+| `bootty.fontSize` | `0` | Font size in pixels (0 = use editor size) |
+| `bootty.defaultTerminalLocation` | `"panel"` | Where new terminals open (`"panel"` or `"editor"`) |
+| `bootty.bell` | `"visual"` | Bell style (`"visual"` or `"none"`) |
+| `bootty.notifications` | `true` | Show notifications from terminal apps (OSC 9) |
 
 ## Requirements
 
@@ -77,7 +81,7 @@ You can also use the Command Palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</k
 
 ## Related Repositories
 
-- [vscode-ghostty](https://github.com/0xBigBoss/vscode-ghostty) - This VS Code extension
+- [BooTTY](https://github.com/0xBigBoss/vscode-ghostty) - This VS Code extension
 - [@0xbigboss/ghostty-web](https://github.com/0xBigBoss/ghostty-web) - Fork of ghostty-web with enhanced selection handling ([npm](https://www.npmjs.com/package/@0xbigboss/ghostty-web))
 
 ## License
