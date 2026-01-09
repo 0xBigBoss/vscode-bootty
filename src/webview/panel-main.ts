@@ -117,8 +117,6 @@ interface PanelTerminal {
 		/^((?:[a-zA-Z]:)?(?:\.{0,2}[\\/])?[\w.\\/-]+\.[a-zA-Z0-9]+)(?:[:(](\d+)(?:[,:](\d+))?[\])]?)?$/;
 
 	// DOM elements
-	const tabList = document.getElementById("tab-list")!;
-	const newTabBtn = document.getElementById("new-tab-btn")!;
 	const terminalsContainer = document.getElementById("terminals-container")!;
 
 	// Read theme colors from VS Code CSS variables
@@ -246,43 +244,6 @@ interface PanelTerminal {
 				flushBatchFileChecks(terminalId);
 			}, BATCH_DEBOUNCE_MS);
 		});
-	}
-
-	// Create a terminal tab element
-	function createTabElement(id: TerminalId, title: string): HTMLElement {
-		const tab = document.createElement("div");
-		tab.className = "tab";
-		tab.dataset.terminalId = id;
-
-		const titleSpan = document.createElement("span");
-		titleSpan.className = "tab-title";
-		titleSpan.textContent = title;
-
-		const closeBtn = document.createElement("button");
-		closeBtn.className = "tab-close";
-		closeBtn.textContent = "×";
-		closeBtn.title = "Close";
-
-		tab.appendChild(titleSpan);
-		tab.appendChild(closeBtn);
-
-		// Click to activate
-		tab.addEventListener("click", (e) => {
-			if (!(e.target as HTMLElement).classList.contains("tab-close")) {
-				activateTerminal(id);
-			}
-		});
-
-		// Close button
-		closeBtn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			vscode.postMessage({
-				type: "tab-close-requested",
-				terminalId: id,
-			} satisfies PanelWebviewMessage);
-		});
-
-		return tab;
 	}
 
 	// Create a terminal instance
@@ -432,10 +393,6 @@ interface PanelTerminal {
 			}
 		});
 
-		// Create tab
-		const tabElement = createTabElement(id, title);
-		tabList.appendChild(tabElement);
-
 		const panelTerminal: PanelTerminal = {
 			id,
 			title,
@@ -454,14 +411,6 @@ interface PanelTerminal {
 		if (!terminal) return;
 
 		activeTerminalId = id;
-
-		// Update tab styling
-		const tabs = tabList.querySelectorAll(".tab");
-		for (let i = 0; i < tabs.length; i++) {
-			const tab = tabs[i] as HTMLElement;
-			const tabId = tab.dataset.terminalId;
-			tab.classList.toggle("active", tabId === id);
-		}
 
 		// Update terminal visibility
 		for (const [tid, t] of terminals) {
@@ -495,44 +444,6 @@ interface PanelTerminal {
 		saveState();
 	}
 
-	// Get ordered list of terminal IDs from tab DOM order
-	function getTabOrder(): TerminalId[] {
-		const tabs = tabList.querySelectorAll(".tab");
-		const order: TerminalId[] = [];
-		for (let i = 0; i < tabs.length; i++) {
-			const tab = tabs[i] as HTMLElement;
-			const id = tab.dataset.terminalId as TerminalId;
-			if (id) order.push(id);
-		}
-		return order;
-	}
-
-	// Navigate to next tab (wraps around)
-	function nextTab(): void {
-		const order = getTabOrder();
-		if (order.length === 0) return;
-		if (!activeTerminalId) {
-			activateTerminal(order[0]);
-			return;
-		}
-		const currentIndex = order.indexOf(activeTerminalId);
-		const nextIndex = (currentIndex + 1) % order.length;
-		activateTerminal(order[nextIndex]);
-	}
-
-	// Navigate to previous tab (wraps around)
-	function previousTab(): void {
-		const order = getTabOrder();
-		if (order.length === 0) return;
-		if (!activeTerminalId) {
-			activateTerminal(order[order.length - 1]);
-			return;
-		}
-		const currentIndex = order.indexOf(activeTerminalId);
-		const prevIndex = (currentIndex - 1 + order.length) % order.length;
-		activateTerminal(order[prevIndex]);
-	}
-
 	// Remove a terminal
 	function removeTerminal(id: TerminalId): void {
 		const terminal = terminals.get(id);
@@ -540,8 +451,6 @@ interface PanelTerminal {
 
 		// Remove DOM elements
 		terminal.container.remove();
-		const tab = tabList.querySelector(`[data-terminal-id="${id}"]`);
-		tab?.remove();
 
 		terminals.delete(id);
 
@@ -564,12 +473,6 @@ interface PanelTerminal {
 		if (!terminal) return;
 
 		terminal.title = title;
-		const tab = tabList.querySelector(`[data-terminal-id="${id}"]`);
-		if (tab) {
-			const titleSpan = tab.querySelector(".tab-title");
-			if (titleSpan) titleSpan.textContent = title;
-		}
-
 		saveState();
 	}
 
@@ -636,14 +539,6 @@ interface PanelTerminal {
 
 			case "activate-tab":
 				activateTerminal(msg.terminalId);
-				break;
-
-			case "next-tab":
-				nextTab();
-				break;
-
-			case "previous-tab":
-				previousTab();
 				break;
 
 			case "focus-terminal": {
@@ -765,13 +660,6 @@ interface PanelTerminal {
 				break;
 			}
 		}
-	});
-
-	// New tab button
-	newTabBtn.addEventListener("click", () => {
-		vscode.postMessage({
-			type: "new-tab-requested",
-		} satisfies PanelWebviewMessage);
 	});
 
 	// ==========================================================================

@@ -168,16 +168,6 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
-	/** Navigate to next tab */
-	nextTab(): void {
-		this.postMessage({ type: "next-tab" });
-	}
-
-	/** Navigate to previous tab */
-	previousTab(): void {
-		this.postMessage({ type: "previous-tab" });
-	}
-
 	/** Focus the active terminal */
 	focusTerminal(): void {
 		this.postMessage({ type: "focus-terminal" });

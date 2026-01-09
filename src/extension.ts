@@ -3,10 +3,15 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { BooTTYPanelViewProvider } from "./panel-view-provider";
 import { TerminalManager } from "./terminal-manager";
-import type { TerminalLocation } from "./types/terminal";
+import {
+	TerminalTreeDataProvider,
+	type TerminalTreeItem,
+} from "./terminal-tree-provider";
+import type { TerminalId, TerminalLocation } from "./types/terminal";
 
 let manager: TerminalManager | undefined;
 let panelProvider: BooTTYPanelViewProvider | undefined;
+let treeProvider: TerminalTreeDataProvider | undefined;
 
 /** Check for deprecated ghostty.* settings and warn user */
 function checkDeprecatedSettings(): void {
@@ -84,13 +89,26 @@ export function activate(context: vscode.ExtensionContext) {
 	// Create panel view provider
 	panelProvider = new BooTTYPanelViewProvider(context.extensionUri);
 
-	// Create terminal manager with panel provider
-	manager = new TerminalManager(context, panelProvider);
+	// Create tree data provider for terminal list
+	treeProvider = new TerminalTreeDataProvider();
+
+	// Create terminal manager with panel provider and tree provider
+	manager = new TerminalManager(context, panelProvider, treeProvider);
 	context.subscriptions.push(manager); // Auto-dispose on deactivate
 
 	// Set up message routing from panel to terminal manager
 	panelProvider.setMessageHandler((message) => {
 		manager!.handlePanelMessage(message);
+	});
+
+	// Wire up tree provider selection handler
+	treeProvider.setSelectHandler((terminalId) => {
+		panelProvider!.activateTerminal(terminalId);
+	});
+
+	// Wire up tree provider close handler
+	treeProvider.setCloseHandler((terminalId) => {
+		manager!.destroyTerminalById(terminalId);
 	});
 
 	// Register panel view provider
@@ -105,6 +123,14 @@ export function activate(context: vscode.ExtensionContext) {
 			},
 		),
 	);
+
+	// Register tree view provider
+	const treeView = vscode.window.createTreeView("boottyTerminalList", {
+		treeDataProvider: treeProvider,
+		showCollapseAll: false,
+	});
+	treeProvider.setTreeView(treeView);
+	context.subscriptions.push(treeView);
 
 	// Helper to create terminal, showing panel first if location is panel
 	async function createTerminalWithLocation(
@@ -168,11 +194,58 @@ export function activate(context: vscode.ExtensionContext) {
 
 		// Tab navigation
 		vscode.commands.registerCommand("bootty.nextTab", () => {
-			panelProvider?.nextTab();
+			const ids = treeProvider?.getTerminalIds() ?? [];
+			const activeId = treeProvider?.getActiveTerminalId();
+			if (ids.length === 0) return;
+			if (!activeId) {
+				panelProvider?.activateTerminal(ids[0]);
+				return;
+			}
+			const currentIndex = ids.indexOf(activeId);
+			const nextIndex = (currentIndex + 1) % ids.length;
+			panelProvider?.activateTerminal(ids[nextIndex]);
 		}),
 		vscode.commands.registerCommand("bootty.previousTab", () => {
-			panelProvider?.previousTab();
+			const ids = treeProvider?.getTerminalIds() ?? [];
+			const activeId = treeProvider?.getActiveTerminalId();
+			if (ids.length === 0) return;
+			if (!activeId) {
+				panelProvider?.activateTerminal(ids[ids.length - 1]);
+				return;
+			}
+			const currentIndex = ids.indexOf(activeId);
+			const prevIndex = (currentIndex - 1 + ids.length) % ids.length;
+			panelProvider?.activateTerminal(ids[prevIndex]);
 		}),
+
+		// Tree view commands
+		vscode.commands.registerCommand(
+			"bootty.selectTerminal",
+			(terminalId: TerminalId) => {
+				treeProvider?.handleSelect(terminalId);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.closeTerminal",
+			(item: TerminalTreeItem) => {
+				if (item?.terminalId) {
+					treeProvider?.handleClose(item.terminalId);
+				}
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.renameTerminal",
+			async (item: TerminalTreeItem) => {
+				if (!item?.terminalId) return;
+				const newName = await vscode.window.showInputBox({
+					prompt: "Enter new terminal name",
+					value: item.label as string,
+				});
+				if (newName !== undefined) {
+					manager?.renameTerminal(item.terminalId, newName);
+				}
+			},
+		),
 	);
 }
 

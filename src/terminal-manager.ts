@@ -5,6 +5,7 @@ import {
 	createVSCodeConfigGetter,
 	resolveDisplaySettings,
 } from "./settings-resolver";
+import type { TerminalTreeDataProvider } from "./terminal-tree-provider";
 import {
 	createTerminalId,
 	EXIT_CLOSE_DELAY_MS,
@@ -45,7 +46,11 @@ function resolveTerminalTheme(): TerminalTheme {
 			.get<Record<string, unknown>>("colorCustomizations") ?? {};
 
 	// Get current theme name for theme-scoped overrides (e.g., "[Monokai]": {...})
-	const currentThemeName = vscode.window.activeColorTheme?.label;
+	// Note: VS Code's ColorTheme type doesn't include 'label' but it's available at runtime
+	const activeTheme = vscode.window.activeColorTheme as
+		| { label?: string }
+		| undefined;
+	const currentThemeName = activeTheme?.label;
 
 	// Start with global color customizations (top-level keys without brackets)
 	const mergedColors: Record<string, string> = {};
@@ -109,14 +114,17 @@ export class TerminalManager implements vscode.Disposable {
 	private ptyService: PtyService;
 	private context: vscode.ExtensionContext;
 	private panelProvider: BooTTYPanelViewProvider;
+	private treeProvider: TerminalTreeDataProvider;
 	private usedIndices = new Set<number>(); // Track used indices for reuse
 
 	constructor(
 		context: vscode.ExtensionContext,
 		panelProvider: BooTTYPanelViewProvider,
+		treeProvider: TerminalTreeDataProvider,
 	) {
 		this.context = context;
 		this.panelProvider = panelProvider;
+		this.treeProvider = treeProvider;
 		this.ptyService = new PtyService();
 
 		// Listen for configuration changes (font settings hot reload)
@@ -306,6 +314,10 @@ export class TerminalManager implements vscode.Disposable {
 
 		// Add tab to panel (panel handles message routing)
 		this.panelProvider.addTerminal(id, title, true);
+
+		// Add to tree provider
+		this.treeProvider.addTerminal({ id, title, active: true });
+
 		return id;
 	}
 
@@ -355,6 +367,10 @@ export class TerminalManager implements vscode.Disposable {
 
 		// Add tab to panel with specified title and active state
 		this.panelProvider.addTerminal(id, title, makeActive);
+
+		// Add to tree provider
+		this.treeProvider.addTerminal({ id, title, active: makeActive });
+
 		return id;
 	}
 
@@ -399,6 +415,8 @@ export class TerminalManager implements vscode.Disposable {
 					message.cols,
 					message.rows,
 				);
+				// Update tree view selection
+				this.treeProvider.setActiveTerminal(message.terminalId);
 				break;
 			case "tab-close-requested":
 				this.destroyTerminal(message.terminalId);
@@ -798,6 +816,9 @@ export class TerminalManager implements vscode.Disposable {
 			// Panel: just remove the tab, do NOT dispose the panel WebviewView
 			this.panelProvider.removeTerminal(id);
 
+			// Remove from tree provider
+			this.treeProvider.removeTerminal(id);
+
 			// Auto-close panel when last terminal is closed, but only if BooTTY panel is visible
 			// (avoid closing unrelated panel views like Problems/Output)
 			const remainingPanelTerminals = [...this.terminals.values()].filter(
@@ -810,6 +831,25 @@ export class TerminalManager implements vscode.Disposable {
 				vscode.commands.executeCommand("workbench.action.closePanel");
 			}
 		}
+	}
+
+	/** Public method to destroy a terminal by ID (used by tree provider close handler) */
+	destroyTerminalById(id: TerminalId): void {
+		this.destroyTerminal(id);
+	}
+
+	/** Rename a terminal (updates panel tab and tree view) */
+	renameTerminal(id: TerminalId, title: string): void {
+		const instance = this.terminals.get(id);
+		if (!instance) return;
+
+		instance.title = title;
+
+		if (instance.location === "panel") {
+			this.panelProvider.renameTerminal(id, title);
+			this.treeProvider.renameTerminal(id, title);
+		}
+		// Editor terminals: title is shown in panel title, which we could also update
 	}
 
 	dispose(): void {

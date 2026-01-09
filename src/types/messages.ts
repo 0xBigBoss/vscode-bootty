@@ -68,8 +68,6 @@ export type PanelExtensionMessage =
 	| { type: "remove-tab"; terminalId: TerminalId }
 	| { type: "rename-tab"; terminalId: TerminalId; title: string }
 	| { type: "activate-tab"; terminalId: TerminalId }
-	| { type: "next-tab" }
-	| { type: "previous-tab" }
 	| { type: "focus-terminal" };
 
 /** Webview -> Extension (editor terminals) */

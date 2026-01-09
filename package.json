@@ -26,6 +26,7 @@
 	],
 	"activationEvents": [
 		"onView:boottyTerminalPanel",
+		"onView:boottyTerminalList",
 		"onCommand:bootty.newTerminal",
 		"onCommand:bootty.newTerminalInEditor",
 		"onCommand:bootty.newTerminalInPanel",
@@ -51,6 +52,11 @@
 					"id": "boottyTerminalPanel",
 					"name": "Terminal",
 					"type": "webview"
+				},
+				{
+					"id": "boottyTerminalList",
+					"name": "Terminals",
+					"type": "tree"
 				}
 			]
 		},
@@ -82,6 +88,20 @@
 			{
 				"command": "bootty.previousTab",
 				"title": "BooTTY: Previous Terminal Tab"
+			},
+			{
+				"command": "bootty.selectTerminal",
+				"title": "Select Terminal"
+			},
+			{
+				"command": "bootty.closeTerminal",
+				"title": "Close Terminal",
+				"icon": "$(close)"
+			},
+			{
+				"command": "bootty.renameTerminal",
+				"title": "Rename Terminal",
+				"icon": "$(edit)"
 			}
 		],
 		"menus": {
@@ -89,6 +109,35 @@
 				{
 					"command": "bootty.newTerminalHere",
 					"group": "navigation"
+				}
+			],
+			"view/title": [
+				{
+					"command": "bootty.newTerminalInPanel",
+					"when": "view == boottyTerminalList",
+					"group": "navigation"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "bootty.renameTerminal",
+					"when": "view == boottyTerminalList && viewItem == terminal",
+					"group": "inline@1"
+				},
+				{
+					"command": "bootty.closeTerminal",
+					"when": "view == boottyTerminalList && viewItem == terminal",
+					"group": "inline@2"
+				},
+				{
+					"command": "bootty.renameTerminal",
+					"when": "view == boottyTerminalList && viewItem == terminal",
+					"group": "1_actions@1"
+				},
+				{
+					"command": "bootty.closeTerminal",
+					"when": "view == boottyTerminalList && viewItem == terminal",
+					"group": "1_actions@2"
 				}
 			]
 		},
