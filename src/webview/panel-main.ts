@@ -12,6 +12,8 @@ import {
 import {
 	getKeyHandlerResult,
 	isMacPlatform,
+	isNextTabShortcut,
+	isPrevTabShortcut,
 	isSearchShortcut,
 } from "../keybinding-utils";
 import type {
@@ -21,6 +23,10 @@ import type {
 	TerminalTheme,
 } from "../types/messages";
 import type { TerminalId } from "../types/terminal";
+import {
+	createSearchController,
+	type SearchController,
+} from "./search-controller";
 
 // Declare VS Code API (provided by webview host)
 declare function acquireVsCodeApi(): {
@@ -46,6 +52,7 @@ interface PanelTerminal {
 	fitAddon: unknown; // FitAddon instance
 	container: HTMLElement;
 	currentCwd?: string;
+	searchController: SearchController;
 }
 
 // Wrap in async IIFE for top-level await
@@ -316,7 +323,19 @@ interface PanelTerminal {
 		term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 			if (isSearchShortcut(event, IS_MAC)) {
 				event.preventDefault();
-				// TODO: implement search for panel terminals
+				// Access search controller from terminals map (will exist by the time user presses keys)
+				const terminal = terminals.get(id);
+				terminal?.searchController.show();
+				return true;
+			}
+			if (isNextTabShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				vscode.postMessage({ type: "next-tab-requested" });
+				return true;
+			}
+			if (isPrevTabShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				vscode.postMessage({ type: "prev-tab-requested" });
 				return true;
 			}
 			return getKeyHandlerResult(event, IS_MAC, term.hasSelection?.() ?? false);
@@ -426,12 +445,16 @@ interface PanelTerminal {
 			}
 		});
 
+		// Create search controller for this terminal
+		const searchController = createSearchController(term);
+
 		const panelTerminal: PanelTerminal = {
 			id,
 			title,
 			term,
 			fitAddon,
 			container: wrapper,
+			searchController,
 		};
 		terminals.set(id, panelTerminal);
 
@@ -481,6 +504,9 @@ interface PanelTerminal {
 	function removeTerminal(id: TerminalId): void {
 		const terminal = terminals.get(id);
 		if (!terminal) return;
+
+		// Clean up search controller
+		terminal.searchController.destroy();
 
 		// Remove DOM elements
 		terminal.container.remove();
@@ -581,6 +607,14 @@ interface PanelTerminal {
 						const term = terminal.term as unknown as { focus?: () => void };
 						term.focus?.();
 					}
+				}
+				break;
+			}
+
+			case "show-search": {
+				if (activeTerminalId) {
+					const terminal = terminals.get(activeTerminalId);
+					terminal?.searchController.show();
 				}
 				break;
 			}

@@ -158,6 +158,26 @@ describe("keybinding-utils", () => {
 			expect(getKeyHandlerResult(ctrlAltC, isMac, false)).toBe(undefined);
 		});
 
+		it("bubbles Ctrl+Shift combos to VS Code", () => {
+			const ctrlShiftBacktick: KeyEvent = {
+				key: "`",
+				metaKey: false,
+				ctrlKey: true,
+				shiftKey: true,
+				altKey: false,
+			};
+			expect(getKeyHandlerResult(ctrlShiftBacktick, isMac, false)).toBe(false);
+
+			const ctrlShiftP: KeyEvent = {
+				key: "P",
+				metaKey: false,
+				ctrlKey: true,
+				shiftKey: true,
+				altKey: false,
+			};
+			expect(getKeyHandlerResult(ctrlShiftP, isMac, false)).toBe(false);
+		});
+
 		it("handles regular keys with default processing", () => {
 			const regularA: KeyEvent = {
 				key: "a",

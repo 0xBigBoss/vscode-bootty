@@ -78,14 +78,14 @@ body {
 }
 
 /* Search overlay */
-#search-overlay {
+.search-overlay {
 	position: fixed;
 	top: 32px;
 	right: 20px;
 	z-index: 1000;
 }
 
-#search-overlay .search-container {
+.search-overlay .search-container {
 	display: flex;
 	align-items: center;
 	gap: 4px;
@@ -96,7 +96,7 @@ body {
 	box-shadow: var(--vscode-widget-shadow, 0 2px 8px rgba(0, 0, 0, 0.15));
 }
 
-#search-overlay #search-input {
+.search-overlay .search-input {
 	width: 180px;
 	padding: 4px 8px;
 	border: none;
@@ -107,23 +107,23 @@ body {
 	font-size: 13px;
 }
 
-#search-overlay #search-input::placeholder {
+.search-overlay .search-input::placeholder {
 	color: var(--vscode-input-placeholderForeground);
 }
 
-#search-overlay #search-input:focus {
+.search-overlay .search-input:focus {
 	outline: 1px solid var(--vscode-focusBorder);
 	outline-offset: -1px;
 }
 
-#search-overlay #search-results-count {
+.search-overlay .search-results-count {
 	font-size: 12px;
 	color: var(--vscode-descriptionForeground);
 	min-width: 70px;
 	text-align: center;
 }
 
-#search-overlay button {
+.search-overlay button {
 	padding: 2px 6px;
 	border: none;
 	background-color: transparent;
@@ -133,11 +133,11 @@ body {
 	border-radius: 2px;
 }
 
-#search-overlay button:hover {
+.search-overlay button:hover {
 	background-color: var(--vscode-list-hoverBackground);
 }
 
-#search-overlay button:active {
+.search-overlay button:active {
 	background-color: var(--vscode-list-activeSelectionBackground);
 }
 

@@ -102,6 +102,10 @@
 				"command": "bootty.renameTerminal",
 				"title": "Rename Terminal",
 				"icon": "$(edit)"
+			},
+			{
+				"command": "bootty.search",
+				"title": "BooTTY: Find in Terminal"
 			}
 		],
 		"menus": {
@@ -191,6 +195,36 @@
 				"key": "ctrl+shift+`"
 			},
 			{
+				"command": "-actions.find",
+				"key": "cmd+f",
+				"when": "focusedView == 'boottyTerminalPanel'"
+			},
+			{
+				"command": "-actions.find",
+				"key": "ctrl+f",
+				"when": "focusedView == 'boottyTerminalPanel'"
+			},
+			{
+				"command": "-actions.find",
+				"key": "cmd+f",
+				"when": "activeWebviewPanelId == 'boottyTerminal'"
+			},
+			{
+				"command": "-actions.find",
+				"key": "ctrl+f",
+				"when": "activeWebviewPanelId == 'boottyTerminal'"
+			},
+			{
+				"command": "-workbench.action.nextEditor",
+				"key": "cmd+shift+]",
+				"when": "focusedView == 'boottyTerminalPanel'"
+			},
+			{
+				"command": "-workbench.action.previousEditor",
+				"key": "cmd+shift+[",
+				"when": "focusedView == 'boottyTerminalPanel'"
+			},
+			{
 				"command": "bootty.togglePanel",
 				"key": "ctrl+`"
 			},
@@ -214,6 +248,18 @@
 				"key": "ctrl+shift+[",
 				"mac": "cmd+shift+[",
 				"when": "focusedView == 'boottyTerminalPanel'"
+			},
+			{
+				"command": "bootty.search",
+				"key": "ctrl+f",
+				"mac": "cmd+f",
+				"when": "focusedView == 'boottyTerminalPanel'"
+			},
+			{
+				"command": "bootty.search",
+				"key": "ctrl+f",
+				"mac": "cmd+f",
+				"when": "activeWebviewPanelId == 'boottyTerminal'"
 			}
 		]
 	},

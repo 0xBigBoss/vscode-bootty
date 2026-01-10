@@ -54,7 +54,8 @@ export type ExtensionMessage =
 			batchId: number;
 			results: Array<{ path: string; exists: boolean }>;
 	  }
-	| { type: "update-config"; config: RuntimeConfig };
+	| { type: "update-config"; config: RuntimeConfig }
+	| { type: "show-search" };
 
 /** Extension -> Panel Webview (panel-specific messages) */
 export type PanelExtensionMessage =
@@ -115,4 +116,6 @@ export type PanelWebviewMessage =
 	| { type: "new-tab-requested" }
 	| { type: "new-tab-requested-with-title"; title: string; makeActive: boolean } // Restore with saved metadata
 	| { type: "tab-renamed"; terminalId: TerminalId; title: string } // User edited title
-	| { type: "toggle-panel-requested" }; // Ctrl+` pressed in terminal
+	| { type: "toggle-panel-requested" } // Ctrl+` pressed in terminal
+	| { type: "next-tab-requested" } // Cmd+Shift+] pressed
+	| { type: "prev-tab-requested" }; // Cmd+Shift+[ pressed

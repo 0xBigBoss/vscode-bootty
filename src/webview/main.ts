@@ -370,6 +370,11 @@ interface WebviewState {
 				runtimeConfig = msg.config;
 				break;
 			}
+
+			case "show-search": {
+				searchController.show();
+				break;
+			}
 		}
 	});
 

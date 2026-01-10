@@ -37,17 +37,18 @@ export interface SearchController {
 
 /**
  * Create search overlay DOM element
+ * Uses class selectors instead of IDs to support multiple instances
  */
 function createSearchOverlay(): HTMLElement {
 	const overlay = document.createElement("div");
-	overlay.id = "search-overlay";
+	overlay.className = "search-overlay";
 	overlay.innerHTML = `
     <div class="search-container">
-      <input type="text" id="search-input" placeholder="Search..." />
-      <span id="search-results-count"></span>
-      <button id="search-prev" title="Previous (Shift+Enter)">▲</button>
-      <button id="search-next" title="Next (Enter)">▼</button>
-      <button id="search-close" title="Close (Escape)">✕</button>
+      <input type="text" class="search-input" placeholder="Search..." />
+      <span class="search-results-count"></span>
+      <button class="search-prev" title="Previous (Shift+Enter)">▲</button>
+      <button class="search-next" title="Next (Enter)">▼</button>
+      <button class="search-close" title="Close (Escape)">✕</button>
     </div>
   `;
 	overlay.style.display = "none";
@@ -84,14 +85,22 @@ export function createSearchController(
 	const searchOverlay = createSearchOverlay();
 	document.body.appendChild(searchOverlay);
 
-	// Get DOM elements
-	const searchInput = document.getElementById(
-		"search-input",
+	// Get DOM elements within this overlay (not global getElementById)
+	const searchInput = searchOverlay.querySelector(
+		".search-input",
 	) as HTMLInputElement;
-	const searchResultsCount = document.getElementById("search-results-count")!;
-	const searchPrevBtn = document.getElementById("search-prev")!;
-	const searchNextBtn = document.getElementById("search-next")!;
-	const searchCloseBtn = document.getElementById("search-close")!;
+	const searchResultsCount = searchOverlay.querySelector(
+		".search-results-count",
+	) as HTMLElement;
+	const searchPrevBtn = searchOverlay.querySelector(
+		".search-prev",
+	) as HTMLElement;
+	const searchNextBtn = searchOverlay.querySelector(
+		".search-next",
+	) as HTMLElement;
+	const searchCloseBtn = searchOverlay.querySelector(
+		".search-close",
+	) as HTMLElement;
 
 	// Search state
 	let searchMatches: SearchMatch[] = [];

@@ -246,6 +246,16 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			},
 		),
+
+		// Search in terminal (Cmd+F / Ctrl+F)
+		vscode.commands.registerCommand("bootty.search", () => {
+			// Try active editor terminal first (keybinding context determines which is focused)
+			if (manager?.showSearchInActiveEditor()) {
+				return;
+			}
+			// Fall back to panel terminal
+			panelProvider?.showSearch();
+		}),
 	);
 }
 

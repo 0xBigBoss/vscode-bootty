@@ -117,6 +117,15 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 						vscode.commands.executeCommand("bootty.togglePanel");
 						return;
 					}
+					// Handle tab navigation requests
+					if (message.type === "next-tab-requested") {
+						vscode.commands.executeCommand("bootty.nextTab");
+						return;
+					}
+					if (message.type === "prev-tab-requested") {
+						vscode.commands.executeCommand("bootty.previousTab");
+						return;
+					}
 					// Route all messages to the handler
 					this._messageHandler?.(message);
 				},
@@ -171,6 +180,11 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	/** Focus the active terminal */
 	focusTerminal(): void {
 		this.postMessage({ type: "focus-terminal" });
+	}
+
+	/** Show the search overlay in the active terminal */
+	showSearch(): void {
+		this.postMessage({ type: "show-search" });
 	}
 
 	/** Check if the panel is visible */

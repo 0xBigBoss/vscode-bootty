@@ -34,6 +34,26 @@ export function isSearchShortcut(event: KeyEvent, isMac: boolean): boolean {
 }
 
 /**
+ * Check if Cmd+Shift+] or Ctrl+Shift+] for next tab
+ */
+export function isNextTabShortcut(event: KeyEvent, isMac: boolean): boolean {
+	if (isMac) {
+		return event.metaKey && event.shiftKey && event.key === "]";
+	}
+	return event.ctrlKey && event.shiftKey && event.key === "]";
+}
+
+/**
+ * Check if Cmd+Shift+[ or Ctrl+Shift+[ for previous tab
+ */
+export function isPrevTabShortcut(event: KeyEvent, isMac: boolean): boolean {
+	if (isMac) {
+		return event.metaKey && event.shiftKey && event.key === "[";
+	}
+	return event.ctrlKey && event.shiftKey && event.key === "[";
+}
+
+/**
  * Determine how to handle a key event in the terminal
  *
  * On Mac:
@@ -54,6 +74,10 @@ export function getKeyHandlerResult(
 	if (isMac) {
 		// Cmd combos bubble to VS Code (Cmd+P, Cmd+Shift+P, etc.)
 		if (event.metaKey) {
+			return false;
+		}
+		// Ctrl+Shift combos bubble to VS Code (Ctrl+Shift+`, etc.)
+		if (event.ctrlKey && event.shiftKey) {
 			return false;
 		}
 		// Ctrl+letter on Mac: let terminal process as control sequences (Ctrl+C→^C, etc.)

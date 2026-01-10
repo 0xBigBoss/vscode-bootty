@@ -183,6 +183,17 @@ export class TerminalManager implements vscode.Disposable {
 		}
 	}
 
+	/** Show search in the active editor terminal (if any) */
+	showSearchInActiveEditor(): boolean {
+		for (const instance of this.terminals.values()) {
+			if (instance.location === "editor" && instance.panel.active) {
+				instance.panel.webview.postMessage({ type: "show-search" });
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Broadcast updated settings to all ready terminals */
 	private broadcastSettingsUpdate(): void {
 		const settings = getDisplaySettings();
@@ -431,6 +442,8 @@ export class TerminalManager implements vscode.Disposable {
 				this.handleTabRenamed(message.terminalId, message.title);
 				break;
 			case "toggle-panel-requested":
+			case "next-tab-requested":
+			case "prev-tab-requested":
 				// Handled by panel-view-provider, not terminal-manager
 				break;
 			default:
