@@ -64,6 +64,7 @@ export class TerminalTreeDataProvider
 	private _selectHandler?: TerminalSelectHandler;
 	private _closeHandler?: TerminalCloseHandler;
 	private _treeView?: vscode.TreeView<TerminalTreeItem>;
+	private _pendingReveal = false;
 
 	/** Set the handler for terminal selection events */
 	setSelectHandler(handler: TerminalSelectHandler): void {
@@ -88,7 +89,18 @@ export class TerminalTreeDataProvider
 
 	/** Add a terminal to the list */
 	addTerminal(entry: TerminalEntry): void {
+		// Mark all others as inactive if this one is active
+		if (entry.active) {
+			for (const t of this._terminals) {
+				t.active = false;
+			}
+		}
 		this._terminals.push(entry);
+
+		// Schedule reveal after tree refresh (event-driven via getChildren)
+		if (entry.active) {
+			this._pendingReveal = true;
+		}
 		this._onDidChangeTreeData.fire(undefined);
 	}
 
@@ -113,19 +125,22 @@ export class TerminalTreeDataProvider
 			terminal.active = terminal.id === terminalId;
 		}
 		this._onDidChangeTreeData.fire(undefined);
+		this._revealActiveTerminal();
+	}
 
-		// Also update tree selection to match active terminal
-		if (this._treeView) {
-			const activeTerminal = this._terminals.find((t) => t.active);
-			if (activeTerminal) {
-				const item = new TerminalTreeItem(
-					activeTerminal.id,
-					activeTerminal.title,
-					true,
-				);
-				this._treeView.reveal(item, { select: true, focus: false });
-			}
-		}
+	/** Reveal and select the active terminal in the tree */
+	private _revealActiveTerminal(): void {
+		if (!this._treeView) return;
+		const activeTerminal = this._terminals.find((t) => t.active);
+		if (!activeTerminal) return;
+
+		const item = new TerminalTreeItem(
+			activeTerminal.id,
+			activeTerminal.title,
+			true,
+		);
+		// Reveal with select to update tree selection
+		this._treeView.reveal(item, { select: true, focus: false });
 	}
 
 	/** Handle terminal selection (called by command) */
@@ -159,9 +174,18 @@ export class TerminalTreeDataProvider
 	): vscode.ProviderResult<TerminalTreeItem[]> {
 		// Root level: return all terminals
 		if (!element) {
-			return this._terminals.map(
+			const items = this._terminals.map(
 				(t) => new TerminalTreeItem(t.id, t.title, t.active),
 			);
+
+			// Event-driven reveal: VS Code called getChildren, tree is being refreshed
+			// Schedule reveal for next tick after tree update completes
+			if (this._pendingReveal) {
+				this._pendingReveal = false;
+				queueMicrotask(() => this._revealActiveTerminal());
+			}
+
+			return items;
 		}
 		// Terminals have no children
 		return [];

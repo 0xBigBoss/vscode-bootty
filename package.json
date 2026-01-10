@@ -71,7 +71,8 @@
 			},
 			{
 				"command": "bootty.newTerminalInPanel",
-				"title": "BooTTY: New Terminal in Panel"
+				"title": "BooTTY: New Terminal in Panel",
+				"icon": "$(plus)"
 			},
 			{
 				"command": "bootty.togglePanel",
@@ -96,7 +97,7 @@
 			{
 				"command": "bootty.closeTerminal",
 				"title": "Close Terminal",
-				"icon": "$(close)"
+				"icon": "$(trash)"
 			},
 			{
 				"command": "bootty.renameTerminal",
