@@ -20,8 +20,9 @@ export interface TerminalListState {
 	items: TerminalListItem[];
 	groups: TerminalGroup[];
 	listWidth: number;
-	selectedTerminalId: TerminalId | null;
+	selectedTerminalIds: Set<TerminalId>; // Multi-select support
 	focusedTerminalId: TerminalId | null;
+	lastSelectedId: TerminalId | null; // For shift-click range selection
 }
 
 /** Events emitted by the terminal list */
@@ -30,6 +31,7 @@ export interface TerminalListEvents {
 	onClose: (id: TerminalId) => void;
 	onSplit: (id: TerminalId) => void;
 	onContextMenu: (id: TerminalId, x: number, y: number) => void;
+	onMultiSelectContextMenu: (ids: TerminalId[], x: number, y: number) => void;
 	onReorder: (ids: TerminalId[]) => void;
 	onGroupReorder: (groupId: string, terminalIds: TerminalId[]) => void;
 	onWidthChange: (width: number) => void;
@@ -70,8 +72,9 @@ export class TerminalList {
 			items: [],
 			groups: [],
 			listWidth: initialWidth,
-			selectedTerminalId: null,
+			selectedTerminalIds: new Set(),
 			focusedTerminalId: null,
+			lastSelectedId: null,
 		};
 
 		// Create list container
@@ -136,8 +139,9 @@ export class TerminalList {
 	/** Remove a terminal from the list */
 	removeTerminal(id: TerminalId): void {
 		this.state.items = this.state.items.filter((item) => item.id !== id);
-		if (this.state.selectedTerminalId === id) {
-			this.state.selectedTerminalId = null;
+		this.state.selectedTerminalIds.delete(id);
+		if (this.state.lastSelectedId === id) {
+			this.state.lastSelectedId = null;
 		}
 		if (this.state.focusedTerminalId === id) {
 			this.state.focusedTerminalId = null;
@@ -154,14 +158,28 @@ export class TerminalList {
 		}
 	}
 
-	/** Set the selected terminal */
+	/** Set the selected terminal (clears multi-select) */
 	setSelected(id: TerminalId | null): void {
-		if (this.state.selectedTerminalId !== id) {
-			this.state.selectedTerminalId = id;
-			// Focus is cleared when selection changes (per spec)
-			this.state.focusedTerminalId = null;
-			this.render();
+		this.state.selectedTerminalIds.clear();
+		if (id) {
+			this.state.selectedTerminalIds.add(id);
+			this.state.lastSelectedId = id;
+		} else {
+			this.state.lastSelectedId = null;
 		}
+		// Focus is cleared when selection changes (per spec)
+		this.state.focusedTerminalId = null;
+		this.render();
+	}
+
+	/** Get selected terminal IDs */
+	getSelectedIds(): TerminalId[] {
+		return Array.from(this.state.selectedTerminalIds);
+	}
+
+	/** Check if a terminal is selected */
+	isSelected(id: TerminalId): boolean {
+		return this.state.selectedTerminalIds.has(id);
 	}
 
 	/** Set the focused terminal */
@@ -364,19 +382,76 @@ export class TerminalList {
 		this.listElement.appendChild(btn);
 	}
 
+	/** Handle click on a terminal list item with multi-select support */
+	private handleItemClick(id: TerminalId, e: MouseEvent): void {
+		const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+		const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey;
+
+		if (ctrlOrCmd) {
+			// Ctrl/Cmd+click: toggle selection
+			if (this.state.selectedTerminalIds.has(id)) {
+				this.state.selectedTerminalIds.delete(id);
+				// Update lastSelectedId if we just deselected it
+				if (this.state.lastSelectedId === id) {
+					const remaining = Array.from(this.state.selectedTerminalIds);
+					this.state.lastSelectedId =
+						remaining.length > 0 ? remaining[remaining.length - 1] : null;
+				}
+			} else {
+				this.state.selectedTerminalIds.add(id);
+				this.state.lastSelectedId = id;
+			}
+			this.state.focusedTerminalId = null;
+			this.render();
+			// Don't emit onSelect for multi-select operations
+		} else if (e.shiftKey && this.state.lastSelectedId) {
+			// Shift+click: range selection
+			const startIndex = this.state.items.findIndex(
+				(i) => i.id === this.state.lastSelectedId,
+			);
+			const endIndex = this.state.items.findIndex((i) => i.id === id);
+
+			if (startIndex !== -1 && endIndex !== -1) {
+				const [from, to] =
+					startIndex < endIndex
+						? [startIndex, endIndex]
+						: [endIndex, startIndex];
+
+				// Add all items in range to selection
+				for (let i = from; i <= to; i++) {
+					this.state.selectedTerminalIds.add(this.state.items[i].id);
+				}
+				this.state.focusedTerminalId = null;
+				this.render();
+				// Don't emit onSelect for multi-select operations
+			}
+		} else {
+			// Normal click: single selection and activate terminal
+			this.state.selectedTerminalIds.clear();
+			this.state.selectedTerminalIds.add(id);
+			this.state.lastSelectedId = id;
+			this.state.focusedTerminalId = null;
+			this.render();
+			this.events.onSelect(id);
+		}
+	}
+
 	/** Render a single terminal list item */
 	private renderItem(item: TerminalListItem): void {
 		const { prefix } = this.getTreeConnector(item);
-		const isSelected = this.state.selectedTerminalId === item.id;
+		const isSelected = this.state.selectedTerminalIds.has(item.id);
 		const isFocused = this.state.focusedTerminalId === item.id;
 
-		// Check if this terminal belongs to the selected group
+		// Check if this terminal belongs to a group where any terminal is selected
 		let isInSelectedGroup = false;
-		if (item.groupId && this.state.selectedTerminalId) {
-			const selectedItem = this.state.items.find(
-				(i) => i.id === this.state.selectedTerminalId,
-			);
-			isInSelectedGroup = selectedItem?.groupId === item.groupId;
+		if (item.groupId) {
+			for (const selectedId of this.state.selectedTerminalIds) {
+				const selectedItem = this.state.items.find((i) => i.id === selectedId);
+				if (selectedItem?.groupId === item.groupId) {
+					isInSelectedGroup = true;
+					break;
+				}
+			}
 		}
 
 		const itemEl = document.createElement("div");
@@ -438,16 +513,31 @@ export class TerminalList {
 
 		itemEl.appendChild(hoverButtons);
 
-		// Click handler
-		itemEl.addEventListener("click", () => {
-			this.events.onSelect(item.id);
+		// Click handler with multi-select support
+		itemEl.addEventListener("click", (e) => {
+			this.handleItemClick(item.id, e);
 		});
 
 		// Right-click context menu
 		itemEl.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
 			e.stopPropagation(); // Prevent document-level handler from closing menu
-			this.events.onContextMenu(item.id, e.clientX, e.clientY);
+
+			// If right-clicking on an unselected item, select it first
+			if (!this.state.selectedTerminalIds.has(item.id)) {
+				this.state.selectedTerminalIds.clear();
+				this.state.selectedTerminalIds.add(item.id);
+				this.state.lastSelectedId = item.id;
+				this.render();
+			}
+
+			// Show appropriate context menu based on selection count
+			const selectedIds = Array.from(this.state.selectedTerminalIds);
+			if (selectedIds.length > 1) {
+				this.events.onMultiSelectContextMenu(selectedIds, e.clientX, e.clientY);
+			} else {
+				this.events.onContextMenu(item.id, e.clientX, e.clientY);
+			}
 		});
 
 		// Drag-and-drop support for all terminals

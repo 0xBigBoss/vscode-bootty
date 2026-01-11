@@ -110,7 +110,8 @@ interface PersistedTerminalState {
 	id: TerminalId;
 	userTitle?: string;
 	icon?: string;
-	color?: string;
+	colorKey?: string; // Stored key (e.g., "red") - resolved to hex on load
+	color?: string; // Legacy: direct hex value (for backward compat)
 	groupId?: string;
 	orderIndex: number;
 }
@@ -241,6 +242,18 @@ export class TerminalManager implements vscode.Disposable {
 					terminalId: id,
 					theme,
 				});
+			}
+			// Re-resolve terminal list colors when theme changes
+			if (instance.colorKey) {
+				const newColor = TerminalManager.resolveColorKey(instance.colorKey);
+				if (newColor && newColor !== instance.color) {
+					instance.color = newColor;
+					this.panelProvider.postMessage({
+						type: "update-terminal-color",
+						terminalId: id,
+						color: newColor,
+					});
+				}
 			}
 		}
 	}
@@ -415,6 +428,9 @@ export class TerminalManager implements vscode.Disposable {
 			case "tab-renamed":
 				this.handleTabRenamed(message.terminalId, message.title);
 				break;
+			case "rename-requested":
+				this.handleRenameRequested(message.terminalId);
+				break;
 			case "toggle-panel-requested":
 			case "next-tab-requested":
 			case "prev-tab-requested":
@@ -435,11 +451,11 @@ export class TerminalManager implements vscode.Disposable {
 			case "join-requested":
 				this.handleJoinTerminal(message.terminalId, message.targetGroupId);
 				break;
-			case "terminal-color-changed":
-				this.handleTerminalColorChange(message.terminalId, message.color);
+			case "color-picker-requested":
+				this.handleColorPickerRequested(message.terminalId);
 				break;
-			case "terminal-icon-changed":
-				this.handleTerminalIconChange(message.terminalId, message.icon);
+			case "icon-picker-requested":
+				this.handleIconPickerRequested(message.terminalId);
 				break;
 			case "terminals-reordered":
 				this.handleTerminalsReordered(message.terminalIds);
@@ -449,6 +465,9 @@ export class TerminalManager implements vscode.Disposable {
 				break;
 			case "list-width-changed":
 				this.handleListWidthChanged(message.width);
+				break;
+			case "group-selected-requested":
+				this.handleGroupSelectedTerminals(message.terminalIds);
 				break;
 			default:
 				// Handle common WebviewMessage types
@@ -500,6 +519,30 @@ export class TerminalManager implements vscode.Disposable {
 		const instance = this.terminals.get(id);
 		if (instance) {
 			instance.title = title;
+			this.savePersistedState();
+		}
+	}
+
+	/** Handle rename request - show VS Code input box */
+	private async handleRenameRequested(id: TerminalId): Promise<void> {
+		const instance = this.terminals.get(id);
+		if (!instance) return;
+
+		const newTitle = await vscode.window.showInputBox({
+			prompt: "Enter new terminal name",
+			value: instance.title,
+			validateInput: (value) => {
+				if (!value.trim()) {
+					return "Terminal name cannot be empty";
+				}
+				return null;
+			},
+		});
+
+		if (newTitle && newTitle !== instance.title) {
+			instance.title = newTitle;
+			this.panelProvider.renameTerminal(id, newTitle);
+			this.savePersistedState();
 		}
 	}
 
@@ -841,6 +884,12 @@ export class TerminalManager implements vscode.Disposable {
 						type: "group-destroyed",
 						groupId,
 					});
+				} else {
+					// Group still has 2+ members - send update to webview
+					this.panelProvider.postMessage({
+						type: "group-created",
+						group: { id: groupId, terminals: group.terminals },
+					});
 				}
 			}
 			this.terminalToGroup.delete(id);
@@ -895,35 +944,178 @@ export class TerminalManager implements vscode.Disposable {
 		this.handleSplitTerminal(terminalId);
 	}
 
-	/** Handle terminal color change */
-	private handleTerminalColorChange(
-		terminalId: TerminalId,
-		color: string,
-	): void {
-		const instance = this.terminals.get(terminalId);
-		if (!instance) return;
-		instance.color = color;
-		// Forward to webview to update list UI
-		this.panelProvider.postMessage({
-			type: "update-terminal-color",
-			terminalId,
-			color,
-		});
-		this.savePersistedState();
+	/** Terminal color options with theme key mapping and fallback colors */
+	private static readonly TERMINAL_COLORS: ReadonlyArray<{
+		id: string; // Stored key (e.g., "red")
+		label: string;
+		description: string;
+		themeKey: keyof TerminalTheme;
+		fallback: string;
+	}> = [
+		{
+			id: "black",
+			label: "Black",
+			description: "terminal.ansiBlack",
+			themeKey: "black",
+			fallback: "#3d3d3d",
+		},
+		{
+			id: "red",
+			label: "Red",
+			description: "terminal.ansiRed",
+			themeKey: "red",
+			fallback: "#cd3131",
+		},
+		{
+			id: "green",
+			label: "Green",
+			description: "terminal.ansiGreen",
+			themeKey: "green",
+			fallback: "#0dbc79",
+		},
+		{
+			id: "yellow",
+			label: "Yellow",
+			description: "terminal.ansiYellow",
+			themeKey: "yellow",
+			fallback: "#e5e510",
+		},
+		{
+			id: "blue",
+			label: "Blue",
+			description: "terminal.ansiBlue",
+			themeKey: "blue",
+			fallback: "#2472c8",
+		},
+		{
+			id: "magenta",
+			label: "Magenta",
+			description: "terminal.ansiMagenta",
+			themeKey: "magenta",
+			fallback: "#bc3fbc",
+		},
+		{
+			id: "cyan",
+			label: "Cyan",
+			description: "terminal.ansiCyan",
+			themeKey: "cyan",
+			fallback: "#11a8cd",
+		},
+		{
+			id: "white",
+			label: "White",
+			description: "terminal.ansiWhite",
+			themeKey: "white",
+			fallback: "#e5e5e5",
+		},
+	];
+
+	/** Resolve a color key to its current hex value from theme */
+	private static resolveColorKey(colorKey: string): string | undefined {
+		const colorDef = TerminalManager.TERMINAL_COLORS.find(
+			(c) => c.id === colorKey,
+		);
+		if (!colorDef) return undefined;
+		const theme = resolveTerminalTheme();
+		return theme[colorDef.themeKey] ?? colorDef.fallback;
 	}
 
-	/** Handle terminal icon change */
-	private handleTerminalIconChange(terminalId: TerminalId, icon: string): void {
+	/** Terminal icon options for quick pick */
+	private static readonly TERMINAL_ICONS = [
+		"terminal",
+		"terminal-bash",
+		"terminal-cmd",
+		"terminal-powershell",
+		"star",
+		"flame",
+		"bug",
+		"beaker",
+		"rocket",
+		"heart",
+		"zap",
+		"cloud",
+	] as const;
+
+	/** Generate a colored circle SVG as a data URI */
+	private static colorSvgDataUri(color: string): vscode.Uri {
+		const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="${color}"/></svg>`;
+		const encoded = Buffer.from(svg).toString("base64");
+		return vscode.Uri.parse(`data:image/svg+xml;base64,${encoded}`);
+	}
+
+	/** Handle color picker request - show VS Code quick pick */
+	private async handleColorPickerRequested(
+		terminalId: TerminalId,
+	): Promise<void> {
 		const instance = this.terminals.get(terminalId);
 		if (!instance) return;
-		instance.icon = icon;
-		// Forward to webview to update list UI
-		this.panelProvider.postMessage({
-			type: "update-terminal-icon",
-			terminalId,
-			icon,
+
+		// Get theme colors from workbench.colorCustomizations
+		const theme = resolveTerminalTheme();
+
+		// Build items with dynamically colored SVG icons
+		const items: (vscode.QuickPickItem & {
+			colorKey: string;
+			color: string;
+		})[] = TerminalManager.TERMINAL_COLORS.map((c) => {
+			// Use theme color if set, otherwise fall back to default
+			const color = theme[c.themeKey] ?? c.fallback;
+			return {
+				label: c.label,
+				description: c.description,
+				iconPath: TerminalManager.colorSvgDataUri(color),
+				colorKey: c.id,
+				color,
+			};
 		});
-		this.savePersistedState();
+
+		// Add reset option (no icon)
+		items.push({ label: "Reset to default", colorKey: "", color: "" });
+
+		const selected = await vscode.window.showQuickPick(items, {
+			placeHolder: "Select a color for the terminal",
+		});
+
+		if (selected) {
+			// Store the color key for dynamic resolution on theme changes
+			instance.colorKey = selected.colorKey || undefined;
+			instance.color = selected.color || undefined;
+			// Forward to webview to update list UI
+			this.panelProvider.postMessage({
+				type: "update-terminal-color",
+				terminalId,
+				color: selected.color,
+			});
+			this.savePersistedState();
+		}
+	}
+
+	/** Handle icon picker request - show VS Code quick pick */
+	private async handleIconPickerRequested(
+		terminalId: TerminalId,
+	): Promise<void> {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) return;
+
+		const items = TerminalManager.TERMINAL_ICONS.map((icon) => ({
+			label: `$(${icon}) ${icon}`,
+			icon,
+		}));
+
+		const selected = await vscode.window.showQuickPick(items, {
+			placeHolder: "Select an icon for the terminal",
+		});
+
+		if (selected) {
+			instance.icon = selected.icon;
+			// Forward to webview to update list UI
+			this.panelProvider.postMessage({
+				type: "update-terminal-icon",
+				terminalId,
+				icon: selected.icon,
+			});
+			this.savePersistedState();
+		}
 	}
 
 	/** Handle terminals reorder */
@@ -1015,6 +1207,72 @@ export class TerminalManager implements vscode.Disposable {
 			newTerminalId: newId,
 			groupId,
 			insertAfter: sourceTerminalId,
+		});
+
+		// Persist state
+		this.savePersistedState();
+	}
+
+	/** Handle grouping multiple selected terminals into a new group */
+	private handleGroupSelectedTerminals(terminalIds: TerminalId[]): void {
+		// Need at least 2 terminals to group
+		if (terminalIds.length < 2) return;
+
+		// Verify all terminals exist and are panel terminals
+		const validIds: TerminalId[] = [];
+		for (const id of terminalIds) {
+			const instance = this.terminals.get(id);
+			if (instance && instance.location === "panel") {
+				validIds.push(id);
+			}
+		}
+		if (validIds.length < 2) return;
+
+		// Remove any selected terminals from their current groups first
+		for (const id of validIds) {
+			const existingGroupId = this.terminalToGroup.get(id);
+			if (existingGroupId) {
+				const existingGroup = this.groups.get(existingGroupId);
+				if (existingGroup) {
+					existingGroup.terminals = existingGroup.terminals.filter(
+						(tid) => tid !== id,
+					);
+					if (existingGroup.terminals.length <= 1) {
+						// Group is no longer valid, clean up
+						for (const remainingId of existingGroup.terminals) {
+							this.terminalToGroup.delete(remainingId);
+						}
+						this.groups.delete(existingGroupId);
+						this.panelProvider.postMessage({
+							type: "group-destroyed",
+							groupId: existingGroupId,
+						});
+					} else {
+						// Update the group
+						this.panelProvider.postMessage({
+							type: "group-created",
+							group: existingGroup,
+						});
+					}
+				}
+				this.terminalToGroup.delete(id);
+			}
+		}
+
+		// Create new group with all selected terminals (preserving their order in the list)
+		const groupId = createTerminalId();
+		const group: TerminalGroup = { id: groupId, terminals: validIds };
+		this.groups.set(groupId, group);
+
+		// Set group membership for all terminals
+		for (const id of validIds) {
+			this.terminalToGroup.set(id, groupId);
+		}
+
+		// Send group-created message
+		this.panelProvider.postMessage({
+			type: "group-created",
+			group,
 		});
 
 		// Persist state
@@ -1278,7 +1536,8 @@ export class TerminalManager implements vscode.Disposable {
 					id,
 					userTitle: instance.title,
 					icon: instance.icon,
-					color: instance.color,
+					colorKey: instance.colorKey,
+					color: instance.color, // Keep for backward compat
 					groupId: this.terminalToGroup.get(id),
 					orderIndex: i,
 				});
@@ -1358,6 +1617,11 @@ export class TerminalManager implements vscode.Disposable {
 		const id = persisted.id; // Use the persisted ID
 		const index = this.getNextIndex();
 		const title = persisted.userTitle ?? `Terminal ${index}`;
+		// Resolve color: prefer colorKey (dynamic), fall back to legacy color (static)
+		const colorKey = persisted.colorKey;
+		const color = colorKey
+			? TerminalManager.resolveColorKey(colorKey)
+			: persisted.color;
 		const instance: PanelTerminalInstance = {
 			id,
 			location: "panel",
@@ -1367,7 +1631,8 @@ export class TerminalManager implements vscode.Disposable {
 			title,
 			index,
 			icon: persisted.icon,
-			color: persisted.color,
+			colorKey,
+			color,
 		};
 		this.terminals.set(id, instance);
 
@@ -1392,7 +1657,7 @@ export class TerminalManager implements vscode.Disposable {
 		// Add tab to panel with all customizations in one message
 		this.panelProvider.addTerminal(id, title, false, {
 			icon: persisted.icon,
-			color: persisted.color,
+			color,
 			groupId: persisted.groupId,
 		});
 

@@ -24,7 +24,8 @@ interface TerminalInstanceBase {
 	title: string; // User-editable tab title
 	index?: number; // Auto-assigned index for "Terminal N" naming (reused on close)
 	// Customization (Phase 3)
-	color?: string; // Color from palette
+	colorKey?: string; // Color key (e.g., "red") - resolves via theme
+	color?: string; // Resolved hex color (cached, updated on theme change)
 	icon?: string; // Codicon name
 }
 

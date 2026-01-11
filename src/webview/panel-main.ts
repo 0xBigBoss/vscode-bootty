@@ -192,6 +192,9 @@ interface PanelTerminal {
 					groupNames,
 				);
 			},
+			onMultiSelectContextMenu: (ids, x, y) => {
+				contextMenu.showMultiSelect(ids, x, y);
+			},
 			onReorder: (ids) => {
 				vscode.postMessage({
 					type: "terminals-reordered",
@@ -241,41 +244,47 @@ interface PanelTerminal {
 				targetGroupId,
 			} satisfies PanelWebviewMessage);
 		},
-		onColorChange: (id, color) => {
-			terminalList.setTerminalColor(id, color);
+		onColorPicker: (id) => {
+			// Request extension to show color picker
 			vscode.postMessage({
-				type: "terminal-color-changed",
+				type: "color-picker-requested",
 				terminalId: id,
-				color,
 			} satisfies PanelWebviewMessage);
 		},
-		onIconChange: (id, icon) => {
-			terminalList.setTerminalIcon(id, icon);
+		onIconPicker: (id) => {
+			// Request extension to show icon picker
 			vscode.postMessage({
-				type: "terminal-icon-changed",
+				type: "icon-picker-requested",
 				terminalId: id,
-				icon,
 			} satisfies PanelWebviewMessage);
 		},
 		onRename: (id) => {
-			const terminal = terminals.get(id);
-			if (!terminal) return;
-			const newTitle = prompt("Enter new terminal name:", terminal.title);
-			if (newTitle !== null && newTitle !== terminal.title) {
-				renameTerminal(id, newTitle);
-				terminalList.renameTerminal(id, newTitle);
-				vscode.postMessage({
-					type: "tab-renamed",
-					terminalId: id,
-					title: newTitle,
-				} satisfies PanelWebviewMessage);
-			}
+			// Send request to extension to show VS Code input box
+			vscode.postMessage({
+				type: "rename-requested",
+				terminalId: id,
+			} satisfies PanelWebviewMessage);
 		},
 		onKill: (id) => {
 			vscode.postMessage({
 				type: "tab-close-requested",
 				terminalId: id,
 			} satisfies PanelWebviewMessage);
+		},
+		onGroupSelected: (ids) => {
+			vscode.postMessage({
+				type: "group-selected-requested",
+				terminalIds: ids,
+			} satisfies PanelWebviewMessage);
+		},
+		onKillSelected: (ids) => {
+			// Kill each selected terminal
+			for (const id of ids) {
+				vscode.postMessage({
+					type: "tab-close-requested",
+					terminalId: id,
+				} satisfies PanelWebviewMessage);
+			}
 		},
 	});
 

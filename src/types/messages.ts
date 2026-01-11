@@ -149,6 +149,7 @@ export type PanelWebviewMessage =
 	  } // Tab switch with resize
 	| { type: "tab-close-requested"; terminalId: TerminalId }
 	| { type: "new-tab-requested" }
+	| { type: "rename-requested"; terminalId: TerminalId } // Request rename dialog
 	| { type: "tab-renamed"; terminalId: TerminalId; title: string } // User edited title
 	| { type: "toggle-panel-requested" } // Ctrl+` pressed in terminal
 	| { type: "next-tab-requested" } // Cmd+Shift+] pressed
@@ -159,10 +160,12 @@ export type PanelWebviewMessage =
 	| { type: "split-requested"; terminalId: TerminalId }
 	| { type: "unsplit-requested"; terminalId: TerminalId }
 	| { type: "join-requested"; terminalId: TerminalId; targetGroupId: string }
-	// NEW: Customization changes
-	| { type: "terminal-color-changed"; terminalId: TerminalId; color: string }
-	| { type: "terminal-icon-changed"; terminalId: TerminalId; icon: string }
+	// NEW: Customization picker requests (opens VS Code quick pick)
+	| { type: "color-picker-requested"; terminalId: TerminalId }
+	| { type: "icon-picker-requested"; terminalId: TerminalId }
 	// NEW: Reorder and list width changes
 	| { type: "terminals-reordered"; terminalIds: TerminalId[] }
 	| { type: "group-reordered"; groupId: string; terminalIds: TerminalId[] }
-	| { type: "list-width-changed"; width: number };
+	| { type: "list-width-changed"; width: number }
+	// NEW: Multi-select group request
+	| { type: "group-selected-requested"; terminalIds: TerminalId[] };
