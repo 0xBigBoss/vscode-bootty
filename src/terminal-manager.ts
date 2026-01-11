@@ -5,7 +5,6 @@ import {
 	createVSCodeConfigGetter,
 	resolveDisplaySettings,
 } from "./settings-resolver";
-import type { TerminalTreeDataProvider } from "./terminal-tree-provider";
 import {
 	createTerminalId,
 	EXIT_CLOSE_DELAY_MS,
@@ -17,6 +16,7 @@ import type {
 	ExtensionMessage,
 	PanelWebviewMessage,
 	RuntimeConfig,
+	TerminalGroup,
 	TerminalTheme,
 	WebviewMessage,
 } from "./types/messages";
@@ -105,23 +105,50 @@ function getWorkspaceCwd(): string | undefined {
 	return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
+/** Persisted terminal state for a single terminal */
+interface PersistedTerminalState {
+	id: TerminalId;
+	userTitle?: string;
+	icon?: string;
+	color?: string;
+	groupId?: string;
+	orderIndex: number;
+}
+
+/** Persisted workspace state */
+interface PersistedWorkspaceState {
+	terminals: PersistedTerminalState[];
+	groups: TerminalGroup[];
+	activeTerminalId?: TerminalId;
+	listWidth: number;
+}
+
+/** Storage keys for workspaceState */
+const STATE_KEY = "bootty.terminalState";
+
 export class TerminalManager implements vscode.Disposable {
 	private terminals = new Map<TerminalId, TerminalInstance>();
+	private groups = new Map<string, TerminalGroup>(); // Split groups
+	private terminalToGroup = new Map<TerminalId, string>(); // Reverse lookup
+	private terminalOrder: TerminalId[] = []; // Ordered list of terminal IDs
+	private activeTerminalId: TerminalId | null = null; // Currently selected terminal
+	private listWidth = 180; // Persisted list width
+	private persistedTerminals: PersistedTerminalState[] = []; // Terminals to restore on hydration
 	private ptyService: PtyService;
 	private context: vscode.ExtensionContext;
 	private panelProvider: BooTTYPanelViewProvider;
-	private treeProvider: TerminalTreeDataProvider;
 	private usedIndices = new Set<number>(); // Track used indices for reuse
 
 	constructor(
 		context: vscode.ExtensionContext,
 		panelProvider: BooTTYPanelViewProvider,
-		treeProvider: TerminalTreeDataProvider,
 	) {
 		this.context = context;
 		this.panelProvider = panelProvider;
-		this.treeProvider = treeProvider;
 		this.ptyService = new PtyService();
+
+		// Restore persisted state
+		this.loadPersistedState();
 
 		// Listen for configuration changes (font settings hot reload)
 		context.subscriptions.push(
@@ -322,61 +349,10 @@ export class TerminalManager implements vscode.Disposable {
 		// Add tab to panel (panel handles message routing)
 		this.panelProvider.addTerminal(id, title, true);
 
-		// Add to tree provider
-		this.treeProvider.addTerminal({ id, title, active: true });
-
-		return id;
-	}
-
-	/** Create terminal in panel tab with specific title (for state restoration) */
-	private createPanelTerminalWithTitle(
-		title: string,
-		makeActive: boolean,
-	): TerminalId | null {
-		const id = createTerminalId();
-		const cwd = getWorkspaceCwd();
-
-		// Extract and reserve index from "Terminal N" pattern to avoid conflicts
-		const indexMatch = title.match(/^Terminal (\d+)$/);
-		const index = indexMatch ? parseInt(indexMatch[1], 10) : undefined;
-		if (index !== undefined) {
-			this.usedIndices.add(index);
-		}
-
-		const instance: PanelTerminalInstance = {
-			id,
-			location: "panel",
-			config: { cwd },
-			ready: false,
-			dataQueue: [],
-			title,
-			index,
-		};
-		this.terminals.set(id, instance);
-
-		// Spawn PTY
-		const spawnResult = this.spawnPty(id, { cwd });
-		if (!spawnResult.ok) {
-			this.terminals.delete(id);
-			this.releaseIndex(index);
-			return null;
-		}
-
-		// Set ready timeout
-		instance.readyTimeout = setTimeout(() => {
-			if (!instance.ready) {
-				vscode.window.showErrorMessage(
-					"Terminal failed to initialize (timeout)",
-				);
-				this.destroyTerminal(id);
-			}
-		}, READY_TIMEOUT_MS);
-
-		// Add tab to panel with specified title and active state
-		this.panelProvider.addTerminal(id, title, makeActive);
-
-		// Add to tree provider
-		this.treeProvider.addTerminal({ id, title, active: makeActive });
+		// Add to terminal order for persistence
+		this.terminalOrder.push(id);
+		this.activeTerminalId = id;
+		this.savePersistedState();
 
 		return id;
 	}
@@ -406,7 +382,8 @@ export class TerminalManager implements vscode.Disposable {
 	handlePanelMessage(message: PanelWebviewMessage): void {
 		switch (message.type) {
 			case "panel-ready":
-				// Panel webview loaded, ready to receive messages
+				// Panel webview loaded, send hydration state
+				this.handlePanelReady();
 				break;
 			case "terminal-ready":
 				this.handleTerminalReady(
@@ -422,18 +399,19 @@ export class TerminalManager implements vscode.Disposable {
 					message.cols,
 					message.rows,
 				);
-				// Update tree view selection
-				this.treeProvider.setActiveTerminal(message.terminalId);
+				// Update active terminal
+				this.activeTerminalId = message.terminalId;
 				break;
 			case "tab-close-requested":
 				this.destroyTerminal(message.terminalId);
 				break;
 			case "new-tab-requested":
 				this.createTerminal({ location: "panel", cwd: getWorkspaceCwd() });
+				// Focus the newly created terminal
+				this.panelProvider.postMessage({ type: "focus-terminal" });
 				break;
-			case "new-tab-requested-with-title":
-				this.createPanelTerminalWithTitle(message.title, message.makeActive);
-				break;
+			// NOTE: new-tab-requested-with-title is deprecated.
+			// Terminal restoration is now handled via extension state and hydrate-state message.
 			case "tab-renamed":
 				this.handleTabRenamed(message.terminalId, message.title);
 				break;
@@ -442,9 +420,39 @@ export class TerminalManager implements vscode.Disposable {
 			case "prev-tab-requested":
 				// Handled by panel-view-provider, not terminal-manager
 				break;
+			// NEW: Terminal list messages (Phase 1-4)
+			case "terminal-selected":
+				// Selection change - persist active terminal
+				this.activeTerminalId = message.terminalId;
+				this.savePersistedState();
+				break;
+			case "split-requested":
+				this.handleSplitTerminal(message.terminalId);
+				break;
+			case "unsplit-requested":
+				this.handleUnsplitTerminal(message.terminalId);
+				break;
+			case "join-requested":
+				this.handleJoinTerminal(message.terminalId, message.targetGroupId);
+				break;
+			case "terminal-color-changed":
+				this.handleTerminalColorChange(message.terminalId, message.color);
+				break;
+			case "terminal-icon-changed":
+				this.handleTerminalIconChange(message.terminalId, message.icon);
+				break;
+			case "terminals-reordered":
+				this.handleTerminalsReordered(message.terminalIds);
+				break;
+			case "group-reordered":
+				this.handleGroupReordered(message.groupId, message.terminalIds);
+				break;
+			case "list-width-changed":
+				this.handleListWidthChanged(message.width);
+				break;
 			default:
 				// Handle common WebviewMessage types
-				this.handleWebviewMessage(message);
+				this.handleWebviewMessage(message as WebviewMessage);
 		}
 	}
 
@@ -808,6 +816,44 @@ export class TerminalManager implements vscode.Disposable {
 		// Release index for reuse
 		this.releaseIndex(instance.index);
 
+		// Remove from terminal order
+		const orderIndex = this.terminalOrder.indexOf(id);
+		if (orderIndex >= 0) {
+			this.terminalOrder.splice(orderIndex, 1);
+		}
+
+		// Remove from any group
+		const groupId = this.terminalToGroup.get(id);
+		if (groupId) {
+			const group = this.groups.get(groupId);
+			if (group) {
+				const idx = group.terminals.indexOf(id);
+				if (idx >= 0) {
+					group.terminals.splice(idx, 1);
+				}
+				// Dissolve group if only 1 terminal left
+				if (group.terminals.length <= 1) {
+					for (const tid of group.terminals) {
+						this.terminalToGroup.delete(tid);
+					}
+					this.groups.delete(groupId);
+					this.panelProvider.postMessage({
+						type: "group-destroyed",
+						groupId,
+					});
+				}
+			}
+			this.terminalToGroup.delete(id);
+		}
+
+		// Update active terminal if this was active
+		if (this.activeTerminalId === id) {
+			// Select adjacent terminal
+			const remaining = this.getTerminalIds();
+			this.activeTerminalId =
+				remaining.length > 0 ? remaining[remaining.length - 1] : null;
+		}
+
 		// Clear ready timeout if pending
 		if (instance.readyTimeout) {
 			clearTimeout(instance.readyTimeout);
@@ -825,20 +871,18 @@ export class TerminalManager implements vscode.Disposable {
 			// Panel: just remove the tab, do NOT dispose the panel WebviewView
 			this.panelProvider.removeTerminal(id);
 
-			// Remove from tree provider
-			this.treeProvider.removeTerminal(id);
-
-			// Auto-close panel when last terminal is closed, but only if BooTTY panel is visible
-			// (avoid closing unrelated panel views like Problems/Output)
+			// Auto-create new terminal when last one is closed (no empty state)
 			const remainingPanelTerminals = [...this.terminals.values()].filter(
 				(t) => t.location === "panel",
 			);
-			if (
-				remainingPanelTerminals.length === 0 &&
-				this.panelProvider.isVisible
-			) {
-				vscode.commands.executeCommand("workbench.action.closePanel");
+			if (remainingPanelTerminals.length === 0) {
+				// Create new terminal to prevent empty panel
+				this.createTerminal({ location: "panel", cwd: getWorkspaceCwd() });
+				this.panelProvider.postMessage({ type: "focus-terminal" });
 			}
+
+			// Persist state after terminal removal
+			this.savePersistedState();
 		}
 	}
 
@@ -847,7 +891,73 @@ export class TerminalManager implements vscode.Disposable {
 		this.destroyTerminal(id);
 	}
 
-	/** Rename a terminal (updates panel tab and tree view) */
+	/** Public method to split a terminal (used by split command) */
+	splitTerminal(terminalId: TerminalId): void {
+		this.handleSplitTerminal(terminalId);
+	}
+
+	/** Handle terminal color change */
+	private handleTerminalColorChange(
+		terminalId: TerminalId,
+		color: string,
+	): void {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) return;
+		instance.color = color;
+		// Forward to webview to update list UI
+		this.panelProvider.postMessage({
+			type: "update-terminal-color",
+			terminalId,
+			color,
+		});
+		this.savePersistedState();
+	}
+
+	/** Handle terminal icon change */
+	private handleTerminalIconChange(terminalId: TerminalId, icon: string): void {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) return;
+		instance.icon = icon;
+		// Forward to webview to update list UI
+		this.panelProvider.postMessage({
+			type: "update-terminal-icon",
+			terminalId,
+			icon,
+		});
+		this.savePersistedState();
+	}
+
+	/** Handle terminals reorder */
+	private handleTerminalsReordered(terminalIds: TerminalId[]): void {
+		// Update terminal order
+		this.terminalOrder = terminalIds;
+		this.savePersistedState();
+	}
+
+	/** Handle group reorder (within-group drag) */
+	private handleGroupReordered(
+		groupId: string,
+		terminalIds: TerminalId[],
+	): void {
+		const group = this.groups.get(groupId);
+		if (!group) return;
+		// Update group's terminal order
+		group.terminals = terminalIds;
+		// Send updated group back to webview so pane order updates
+		this.panelProvider.postMessage({
+			type: "group-created",
+			group: { id: groupId, terminals: terminalIds },
+		});
+		this.savePersistedState();
+	}
+
+	/** Handle list width change */
+	private handleListWidthChanged(width: number): void {
+		this.listWidth = width;
+		this.savePersistedState();
+	}
+
+	/** Rename a terminal (updates panel tab) */
 	renameTerminal(id: TerminalId, title: string): void {
 		const instance = this.terminals.get(id);
 		if (!instance) return;
@@ -856,12 +966,447 @@ export class TerminalManager implements vscode.Disposable {
 
 		if (instance.location === "panel") {
 			this.panelProvider.renameTerminal(id, title);
-			this.treeProvider.renameTerminal(id, title);
+			this.savePersistedState();
 		}
 		// Editor terminals: title is shown in panel title, which we could also update
 	}
 
+	/** Handle split terminal request - creates a new terminal in a group with the source */
+	private handleSplitTerminal(sourceTerminalId: TerminalId): void {
+		const sourceInstance = this.terminals.get(sourceTerminalId);
+		if (!sourceInstance || sourceInstance.location !== "panel") return;
+
+		// Generate group ID if not already in a group
+		let groupId = this.terminalToGroup.get(sourceTerminalId);
+		let group: TerminalGroup;
+
+		if (groupId) {
+			// Already in a group - add to it
+			group = this.groups.get(groupId)!;
+		} else {
+			// Create new group
+			groupId = createTerminalId(); // Use same UUID generator for groups
+			group = { id: groupId, terminals: [sourceTerminalId] };
+			this.groups.set(groupId, group);
+			this.terminalToGroup.set(sourceTerminalId, groupId);
+		}
+
+		// Create the new split terminal (with makeActive: false, inserted after source)
+		const newId = this.createPanelTerminalForSplit(
+			sourceInstance.currentCwd ?? getWorkspaceCwd(),
+			sourceTerminalId,
+		);
+		if (!newId) return;
+
+		// Add new terminal to the group (insert after source)
+		const insertIndex = group.terminals.indexOf(sourceTerminalId) + 1;
+		group.terminals.splice(insertIndex, 0, newId);
+		this.terminalToGroup.set(newId, groupId);
+
+		// Send group-created AFTER add-tab but with correct member list
+		this.panelProvider.postMessage({
+			type: "group-created",
+			group: { id: groupId, terminals: group.terminals },
+		});
+
+		// Send split-terminal message
+		this.panelProvider.postMessage({
+			type: "split-terminal",
+			terminalId: newId,
+			newTerminalId: newId,
+			groupId,
+			insertAfter: sourceTerminalId,
+		});
+
+		// Persist state
+		this.savePersistedState();
+	}
+
+	/** Create a panel terminal for split (doesn't auto-activate, inserts after source) */
+	private createPanelTerminalForSplit(
+		cwd: string | undefined,
+		insertAfter: TerminalId,
+	): TerminalId | null {
+		const id = createTerminalId();
+		const index = this.getNextIndex();
+		const title = `Terminal ${index}`;
+		const instance: PanelTerminalInstance = {
+			id,
+			location: "panel",
+			config: { cwd },
+			ready: false,
+			dataQueue: [],
+			title,
+			index,
+		};
+		this.terminals.set(id, instance);
+
+		// Spawn PTY
+		const spawnResult = this.spawnPty(id, { cwd });
+		if (!spawnResult.ok) {
+			this.terminals.delete(id);
+			this.releaseIndex(index);
+			return null;
+		}
+
+		// Set ready timeout
+		instance.readyTimeout = setTimeout(() => {
+			if (!instance.ready) {
+				vscode.window.showErrorMessage(
+					"Terminal failed to initialize (timeout)",
+				);
+				this.destroyTerminal(id);
+			}
+		}, READY_TIMEOUT_MS);
+
+		// Add tab to panel WITHOUT makeActive (split doesn't change selection)
+		// Pass insertAfter so the webview inserts it in the correct position
+		this.panelProvider.addTerminal(id, title, false, { insertAfter });
+
+		// Insert after source terminal in terminalOrder (not append)
+		const sourceIndex = this.terminalOrder.indexOf(insertAfter);
+		if (sourceIndex >= 0) {
+			this.terminalOrder.splice(sourceIndex + 1, 0, id);
+		} else {
+			// Fallback: append if source not found
+			this.terminalOrder.push(id);
+		}
+
+		return id;
+	}
+
+	/** Handle unsplit terminal request - removes terminal from its group */
+	private handleUnsplitTerminal(terminalId: TerminalId): void {
+		const groupId = this.terminalToGroup.get(terminalId);
+		if (!groupId) return; // Not in a group
+
+		const group = this.groups.get(groupId);
+		if (!group) return;
+
+		// Remove from group first
+		const index = group.terminals.indexOf(terminalId);
+		if (index >= 0) {
+			group.terminals.splice(index, 1);
+		}
+		this.terminalToGroup.delete(terminalId);
+
+		// Find last remaining terminal in group AFTER removal (for repositioning)
+		const lastGroupTerminal =
+			group.terminals.length > 0
+				? group.terminals[group.terminals.length - 1]
+				: undefined;
+
+		// Reposition unsplit terminal in terminalOrder to be after the remaining group
+		const currentOrderIndex = this.terminalOrder.indexOf(terminalId);
+		if (currentOrderIndex >= 0) {
+			this.terminalOrder.splice(currentOrderIndex, 1);
+		}
+		// Find the last remaining group member's position and insert after it
+		if (lastGroupTerminal) {
+			const lastMemberIndex = this.terminalOrder.indexOf(lastGroupTerminal);
+			if (lastMemberIndex >= 0) {
+				this.terminalOrder.splice(lastMemberIndex + 1, 0, terminalId);
+			} else {
+				this.terminalOrder.push(terminalId);
+			}
+		} else {
+			// No remaining group members, append at end
+			this.terminalOrder.push(terminalId);
+		}
+
+		// Check if group should be destroyed
+		if (group.terminals.length <= 1) {
+			// Destroy the group - remaining terminal becomes standalone
+			for (const tid of group.terminals) {
+				this.terminalToGroup.delete(tid);
+			}
+			this.groups.delete(groupId);
+			this.panelProvider.postMessage({
+				type: "group-destroyed",
+				groupId,
+			});
+		} else {
+			// Update group
+			this.panelProvider.postMessage({
+				type: "group-created",
+				group: { id: groupId, terminals: group.terminals },
+			});
+		}
+
+		// Notify webview of unsplit
+		this.panelProvider.postMessage({
+			type: "unsplit-terminal",
+			terminalId,
+		});
+
+		// Send updated order to webview
+		this.panelProvider.postMessage({
+			type: "reorder-terminals",
+			terminalIds: this.terminalOrder,
+		});
+
+		// Persist state
+		this.savePersistedState();
+	}
+
+	/** Handle join terminal request - adds terminal to an existing group */
+	private handleJoinTerminal(
+		terminalId: TerminalId,
+		targetGroupId: string,
+	): void {
+		const instance = this.terminals.get(terminalId);
+		if (!instance || instance.location !== "panel") return;
+
+		// First unsplit from current group if in one (without sending reorder yet)
+		const currentGroupId = this.terminalToGroup.get(terminalId);
+		if (currentGroupId) {
+			this.handleUnsplitTerminalWithoutReorder(terminalId);
+		}
+
+		// Add to target group
+		const targetGroup = this.groups.get(targetGroupId);
+		if (!targetGroup) return;
+
+		targetGroup.terminals.push(terminalId);
+		this.terminalToGroup.set(terminalId, targetGroupId);
+
+		// Reposition terminal in terminalOrder to be with target group
+		const currentOrderIndex = this.terminalOrder.indexOf(terminalId);
+		if (currentOrderIndex >= 0) {
+			this.terminalOrder.splice(currentOrderIndex, 1);
+		}
+		// Insert after the last member of target group
+		const lastTargetMember =
+			targetGroup.terminals[targetGroup.terminals.length - 2]; // -2 because we just pushed
+		const lastMemberIndex = this.terminalOrder.indexOf(lastTargetMember);
+		if (lastMemberIndex >= 0) {
+			this.terminalOrder.splice(lastMemberIndex + 1, 0, terminalId);
+		} else {
+			this.terminalOrder.push(terminalId);
+		}
+
+		// Notify webview
+		this.panelProvider.postMessage({
+			type: "group-created",
+			group: { id: targetGroupId, terminals: targetGroup.terminals },
+		});
+		this.panelProvider.postMessage({
+			type: "join-terminal",
+			terminalId,
+			groupId: targetGroupId,
+		});
+		this.panelProvider.postMessage({
+			type: "reorder-terminals",
+			terminalIds: this.terminalOrder,
+		});
+
+		// Persist state
+		this.savePersistedState();
+	}
+
+	/** Handle unsplit without sending reorder (used by join which does its own reorder) */
+	private handleUnsplitTerminalWithoutReorder(terminalId: TerminalId): void {
+		const groupId = this.terminalToGroup.get(terminalId);
+		if (!groupId) return;
+
+		const group = this.groups.get(groupId);
+		if (!group) return;
+
+		// Remove from group
+		const index = group.terminals.indexOf(terminalId);
+		if (index >= 0) {
+			group.terminals.splice(index, 1);
+		}
+		this.terminalToGroup.delete(terminalId);
+
+		// Check if group should be destroyed
+		if (group.terminals.length <= 1) {
+			for (const tid of group.terminals) {
+				this.terminalToGroup.delete(tid);
+			}
+			this.groups.delete(groupId);
+			this.panelProvider.postMessage({
+				type: "group-destroyed",
+				groupId,
+			});
+		} else {
+			this.panelProvider.postMessage({
+				type: "group-created",
+				group: { id: groupId, terminals: group.terminals },
+			});
+		}
+
+		this.panelProvider.postMessage({
+			type: "unsplit-terminal",
+			terminalId,
+		});
+	}
+
+	/** Load persisted state from workspaceState */
+	private loadPersistedState(): void {
+		const state =
+			this.context.workspaceState.get<PersistedWorkspaceState>(STATE_KEY);
+		if (!state) return;
+
+		// Restore list width
+		this.listWidth = state.listWidth ?? 180;
+
+		// Store terminals for hydration (they'll be recreated when panel is ready)
+		this.persistedTerminals = state.terminals ?? [];
+
+		// Restore groups (but don't rebuild terminalToGroup yet - terminals don't exist)
+		// Groups will be sent to webview during hydration
+		for (const group of state.groups) {
+			this.groups.set(group.id, {
+				id: group.id,
+				terminals: [...group.terminals],
+			});
+		}
+
+		// Restore active terminal ID (will be used during hydration)
+		this.activeTerminalId = state.activeTerminalId ?? null;
+	}
+
+	/** Save state to workspaceState */
+	private savePersistedState(): void {
+		const terminals: PersistedTerminalState[] = [];
+
+		for (let i = 0; i < this.terminalOrder.length; i++) {
+			const id = this.terminalOrder[i];
+			const instance = this.terminals.get(id);
+			if (instance && instance.location === "panel") {
+				terminals.push({
+					id,
+					userTitle: instance.title,
+					icon: instance.icon,
+					color: instance.color,
+					groupId: this.terminalToGroup.get(id),
+					orderIndex: i,
+				});
+			}
+		}
+
+		const groups: TerminalGroup[] = Array.from(this.groups.values());
+
+		const state: PersistedWorkspaceState = {
+			terminals,
+			groups,
+			activeTerminalId: this.activeTerminalId ?? undefined,
+			listWidth: this.listWidth,
+		};
+
+		this.context.workspaceState.update(STATE_KEY, state);
+	}
+
+	/** Get ordered terminal IDs for panel terminals */
+	getTerminalIds(): TerminalId[] {
+		return this.terminalOrder.filter((id) => {
+			const instance = this.terminals.get(id);
+			return instance?.location === "panel";
+		});
+	}
+
+	/** Get the active terminal ID */
+	getActiveTerminalId(): TerminalId | undefined {
+		return this.activeTerminalId ?? undefined;
+	}
+
+	/** Handle panel-ready by recreating terminals and sending hydration state */
+	handlePanelReady(): void {
+		// Send hydrate-state with UI configuration
+		this.panelProvider.postMessage({
+			type: "hydrate-state",
+			listWidth: this.listWidth,
+		});
+
+		// Recreate terminals from persisted state (add-tab includes groupId)
+		const savedActiveId = this.activeTerminalId;
+		for (const persisted of this.persistedTerminals) {
+			const newId = this.createPanelTerminalForHydration(persisted);
+			if (newId && persisted.groupId) {
+				// Rebuild terminalToGroup mapping
+				this.terminalToGroup.set(newId, persisted.groupId);
+			}
+		}
+
+		// Send group-created AFTER add-tab messages so webview has terminals
+		for (const group of this.groups.values()) {
+			this.panelProvider.postMessage({
+				type: "group-created",
+				group: { id: group.id, terminals: group.terminals },
+			});
+		}
+
+		// Clear persisted terminals (they've been recreated)
+		this.persistedTerminals = [];
+
+		// Activate the saved active terminal
+		if (savedActiveId && this.terminals.has(savedActiveId)) {
+			this.panelProvider.postMessage({
+				type: "activate-tab",
+				terminalId: savedActiveId,
+			});
+			this.panelProvider.postMessage({
+				type: "focus-terminal",
+			});
+		}
+	}
+
+	/** Create a panel terminal for hydration (doesn't auto-activate) */
+	private createPanelTerminalForHydration(
+		persisted: PersistedTerminalState,
+	): TerminalId | null {
+		const id = persisted.id; // Use the persisted ID
+		const index = this.getNextIndex();
+		const title = persisted.userTitle ?? `Terminal ${index}`;
+		const instance: PanelTerminalInstance = {
+			id,
+			location: "panel",
+			config: {},
+			ready: false,
+			dataQueue: [],
+			title,
+			index,
+			icon: persisted.icon,
+			color: persisted.color,
+		};
+		this.terminals.set(id, instance);
+
+		// Spawn PTY (use workspace cwd since we don't persist cwd)
+		const spawnResult = this.spawnPty(id, { cwd: getWorkspaceCwd() });
+		if (!spawnResult.ok) {
+			this.terminals.delete(id);
+			this.releaseIndex(index);
+			return null;
+		}
+
+		// Set ready timeout
+		instance.readyTimeout = setTimeout(() => {
+			if (!instance.ready) {
+				vscode.window.showErrorMessage(
+					"Terminal failed to initialize (timeout)",
+				);
+				this.destroyTerminal(id);
+			}
+		}, READY_TIMEOUT_MS);
+
+		// Add tab to panel with all customizations in one message
+		this.panelProvider.addTerminal(id, title, false, {
+			icon: persisted.icon,
+			color: persisted.color,
+			groupId: persisted.groupId,
+		});
+
+		// Add to terminal order
+		this.terminalOrder.push(id);
+
+		return id;
+	}
+
 	dispose(): void {
+		// Save state before disposing
+		this.savePersistedState();
+
 		for (const [id, instance] of this.terminals) {
 			if (instance.readyTimeout) {
 				clearTimeout(instance.readyTimeout);

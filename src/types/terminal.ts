@@ -23,6 +23,9 @@ interface TerminalInstanceBase {
 	currentCwd?: string; // Current working directory (tracked via OSC 7)
 	title: string; // User-editable tab title
 	index?: number; // Auto-assigned index for "Terminal N" naming (reused on close)
+	// Customization (Phase 3)
+	color?: string; // Color from palette
+	icon?: string; // Codicon name
 }
 
 /** Editor terminals have their own WebviewPanel */
@@ -43,10 +46,3 @@ export interface PanelTerminalInstance extends TerminalInstanceBase {
  * - PanelTerminalInstance has no `panel` field
  */
 export type TerminalInstance = EditorTerminalInstance | PanelTerminalInstance;
-
-/** Panel tab metadata for webview state */
-export interface PanelTab {
-	id: TerminalId;
-	title: string;
-	active: boolean;
-}

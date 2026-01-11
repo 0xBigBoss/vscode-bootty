@@ -6,7 +6,13 @@
   <link rel="stylesheet" href="{{stylesUri}}">
 </head>
 <body data-wasm-url="{{wasmUri}}">
-  <div id="terminals-container"></div>
+  <!-- Main panel container with terminal area and list -->
+  <div id="panel-container">
+    <!-- Terminal display area (left) -->
+    <div id="terminals-container"></div>
+    <!-- Terminal list (right, resizable) -->
+    <div id="terminal-list-container"></div>
+  </div>
   <script src="{{ghosttyWebJsUri}}"></script>
   <script src="{{mainJsUri}}"></script>
 </body>

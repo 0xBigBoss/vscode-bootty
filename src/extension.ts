@@ -3,15 +3,10 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { BooTTYPanelViewProvider } from "./panel-view-provider";
 import { TerminalManager } from "./terminal-manager";
-import {
-	TerminalTreeDataProvider,
-	type TerminalTreeItem,
-} from "./terminal-tree-provider";
-import type { TerminalId, TerminalLocation } from "./types/terminal";
+import type { TerminalLocation } from "./types/terminal";
 
 let manager: TerminalManager | undefined;
 let panelProvider: BooTTYPanelViewProvider | undefined;
-let treeProvider: TerminalTreeDataProvider | undefined;
 
 /** Check for deprecated ghostty.* settings and warn user */
 function checkDeprecatedSettings(): void {
@@ -89,26 +84,13 @@ export function activate(context: vscode.ExtensionContext) {
 	// Create panel view provider
 	panelProvider = new BooTTYPanelViewProvider(context.extensionUri);
 
-	// Create tree data provider for terminal list
-	treeProvider = new TerminalTreeDataProvider();
-
-	// Create terminal manager with panel provider and tree provider
-	manager = new TerminalManager(context, panelProvider, treeProvider);
+	// Create terminal manager with panel provider
+	manager = new TerminalManager(context, panelProvider);
 	context.subscriptions.push(manager); // Auto-dispose on deactivate
 
 	// Set up message routing from panel to terminal manager
 	panelProvider.setMessageHandler((message) => {
 		manager!.handlePanelMessage(message);
-	});
-
-	// Wire up tree provider selection handler
-	treeProvider.setSelectHandler((terminalId) => {
-		panelProvider!.activateTerminal(terminalId);
-	});
-
-	// Wire up tree provider close handler
-	treeProvider.setCloseHandler((terminalId) => {
-		manager!.destroyTerminalById(terminalId);
 	});
 
 	// Register panel view provider
@@ -124,14 +106,6 @@ export function activate(context: vscode.ExtensionContext) {
 		),
 	);
 
-	// Register tree view provider
-	const treeView = vscode.window.createTreeView("boottyTerminalList", {
-		treeDataProvider: treeProvider,
-		showCollapseAll: false,
-	});
-	treeProvider.setTreeView(treeView);
-	context.subscriptions.push(treeView);
-
 	// Helper to create terminal, showing panel first if location is panel
 	async function createTerminalWithLocation(
 		location: TerminalLocation,
@@ -142,6 +116,10 @@ export function activate(context: vscode.ExtensionContext) {
 			await panelProvider!.show();
 		}
 		manager!.createTerminal({ cwd, location });
+		// Focus the newly created terminal
+		if (location === "panel") {
+			panelProvider!.focusTerminal();
+		}
 	}
 
 	// Register commands
@@ -192,10 +170,10 @@ export function activate(context: vscode.ExtensionContext) {
 			},
 		),
 
-		// Tab navigation
+		// Tab navigation - use manager's terminal IDs
 		vscode.commands.registerCommand("bootty.nextTab", () => {
-			const ids = treeProvider?.getTerminalIds() ?? [];
-			const activeId = treeProvider?.getActiveTerminalId();
+			const ids = manager?.getTerminalIds() ?? [];
+			const activeId = manager?.getActiveTerminalId();
 			if (ids.length === 0) return;
 			if (!activeId) {
 				panelProvider?.activateTerminal(ids[0]);
@@ -206,8 +184,8 @@ export function activate(context: vscode.ExtensionContext) {
 			panelProvider?.activateTerminal(ids[nextIndex]);
 		}),
 		vscode.commands.registerCommand("bootty.previousTab", () => {
-			const ids = treeProvider?.getTerminalIds() ?? [];
-			const activeId = treeProvider?.getActiveTerminalId();
+			const ids = manager?.getTerminalIds() ?? [];
+			const activeId = manager?.getActiveTerminalId();
 			if (ids.length === 0) return;
 			if (!activeId) {
 				panelProvider?.activateTerminal(ids[ids.length - 1]);
@@ -218,35 +196,6 @@ export function activate(context: vscode.ExtensionContext) {
 			panelProvider?.activateTerminal(ids[prevIndex]);
 		}),
 
-		// Tree view commands
-		vscode.commands.registerCommand(
-			"bootty.selectTerminal",
-			(terminalId: TerminalId) => {
-				treeProvider?.handleSelect(terminalId);
-			},
-		),
-		vscode.commands.registerCommand(
-			"bootty.closeTerminal",
-			(item: TerminalTreeItem) => {
-				if (item?.terminalId) {
-					treeProvider?.handleClose(item.terminalId);
-				}
-			},
-		),
-		vscode.commands.registerCommand(
-			"bootty.renameTerminal",
-			async (item: TerminalTreeItem) => {
-				if (!item?.terminalId) return;
-				const newName = await vscode.window.showInputBox({
-					prompt: "Enter new terminal name",
-					value: item.label as string,
-				});
-				if (newName !== undefined) {
-					manager?.renameTerminal(item.terminalId, newName);
-				}
-			},
-		),
-
 		// Search in terminal (Cmd+F / Ctrl+F)
 		vscode.commands.registerCommand("bootty.search", () => {
 			// Try active editor terminal first (keybinding context determines which is focused)
@@ -255,6 +204,14 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			// Fall back to panel terminal
 			panelProvider?.showSearch();
+		}),
+
+		// Split terminal (Cmd+\ / Ctrl+\)
+		vscode.commands.registerCommand("bootty.splitTerminal", () => {
+			const activeId = manager?.getActiveTerminalId();
+			if (activeId) {
+				manager?.splitTerminal(activeId);
+			}
 		}),
 	);
 }
