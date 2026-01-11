@@ -33,6 +33,7 @@ export interface TerminalListEvents {
 	onReorder: (ids: TerminalId[]) => void;
 	onGroupReorder: (groupId: string, terminalIds: TerminalId[]) => void;
 	onWidthChange: (width: number) => void;
+	onNewTerminal: () => void;
 }
 
 /** Tree connector characters for split groups */
@@ -93,7 +94,10 @@ export class TerminalList {
 
 	/** Update list width */
 	setWidth(width: number): void {
-		const maxWidth = this.container.clientWidth * 0.5;
+		// Use parent container (panel-container) or window width for max calculation
+		const parentWidth =
+			this.container.parentElement?.clientWidth ?? window.innerWidth;
+		const maxWidth = parentWidth * 0.5;
 		const clampedWidth = Math.max(MIN_LIST_WIDTH, Math.min(width, maxWidth));
 		this.state.listWidth = clampedWidth;
 		this.listElement.style.width = `${clampedWidth}px`;
@@ -335,6 +339,29 @@ export class TerminalList {
 				renderedItems.add(item.id);
 			}
 		}
+
+		// Add "New Terminal" button at the end
+		this.renderNewTerminalButton();
+	}
+
+	/** Render the new terminal button */
+	private renderNewTerminalButton(): void {
+		const btn = document.createElement("div");
+		btn.className = "new-terminal-btn";
+
+		const iconEl = document.createElement("span");
+		iconEl.className = "codicon codicon-add";
+		btn.appendChild(iconEl);
+
+		const labelEl = document.createElement("span");
+		labelEl.textContent = "New Terminal";
+		btn.appendChild(labelEl);
+
+		btn.addEventListener("click", () => {
+			this.events.onNewTerminal();
+		});
+
+		this.listElement.appendChild(btn);
 	}
 
 	/** Render a single terminal list item */
@@ -370,17 +397,13 @@ export class TerminalList {
 			itemEl.appendChild(prefixEl);
 		}
 
-		// Color indicator (if set)
-		if (item.color) {
-			const colorDot = document.createElement("span");
-			colorDot.className = "color-indicator";
-			colorDot.style.backgroundColor = item.color;
-			itemEl.appendChild(colorDot);
-		}
-
-		// Icon
+		// Icon (colored if color is set)
 		const iconEl = document.createElement("span");
-		iconEl.className = `codicon codicon-${item.icon || "terminal"}`;
+		iconEl.className = `codicon codicon-${item.icon || "terminal"} terminal-icon`;
+		if (item.color) {
+			iconEl.classList.add("colored");
+			iconEl.style.color = item.color;
+		}
 		itemEl.appendChild(iconEl);
 
 		// Title
@@ -423,6 +446,7 @@ export class TerminalList {
 		// Right-click context menu
 		itemEl.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
+			e.stopPropagation(); // Prevent document-level handler from closing menu
 			this.events.onContextMenu(item.id, e.clientX, e.clientY);
 		});
 

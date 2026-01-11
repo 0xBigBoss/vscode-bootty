@@ -246,6 +246,7 @@
 	},
 	"dependencies": {
 		"@0xbigboss/ghostty-web": "^0.4.0",
+		"@vscode/codicons": "^0.0.44",
 		"node-pty": "^1.0.0"
 	},
 	"devDependencies": {

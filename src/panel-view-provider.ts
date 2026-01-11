@@ -50,6 +50,13 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 					"ghostty-web",
 					"dist",
 				),
+				vscode.Uri.joinPath(
+					this._extensionUri,
+					"node_modules",
+					"@vscode",
+					"codicons",
+					"dist",
+				),
 			],
 		};
 
@@ -214,6 +221,13 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			"ghostty-web",
 			"dist",
 		);
+		const codiconsPath = path.join(
+			extensionPath,
+			"node_modules",
+			"@vscode",
+			"codicons",
+			"dist",
+		);
 
 		const ghosttyWebJsUri = webview.asWebviewUri(
 			vscode.Uri.file(path.join(ghosttyWebPath, "ghostty-web.umd.cjs")),
@@ -231,6 +245,9 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 				path.join(extensionPath, "out", "webview", "panel-styles.css"),
 			),
 		);
+		const codiconsUri = webview.asWebviewUri(
+			vscode.Uri.file(path.join(codiconsPath, "codicon.css")),
+		);
 
 		// Read template and replace placeholders
 		const templatePath = path.join(
@@ -246,7 +263,8 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			.replace(/\{\{wasmUri\}\}/g, wasmUri.toString())
 			.replace(/\{\{ghosttyWebJsUri\}\}/g, ghosttyWebJsUri.toString())
 			.replace(/\{\{mainJsUri\}\}/g, mainJsUri.toString())
-			.replace(/\{\{stylesUri\}\}/g, stylesUri.toString());
+			.replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
+			.replace(/\{\{codiconsUri\}\}/g, codiconsUri.toString());
 
 		return html;
 	}

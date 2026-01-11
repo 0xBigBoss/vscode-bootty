@@ -211,6 +211,11 @@ interface PanelTerminal {
 					width,
 				} satisfies PanelWebviewMessage);
 			},
+			onNewTerminal: () => {
+				vscode.postMessage({
+					type: "new-tab-requested",
+				} satisfies PanelWebviewMessage);
+			},
 		},
 		180, // Default width
 	);
@@ -273,6 +278,20 @@ interface PanelTerminal {
 			} satisfies PanelWebviewMessage);
 		},
 	});
+
+	// ResizeObserver on terminals container to recalculate split pane widths
+	let containerResizeTimer: ReturnType<typeof setTimeout> | null = null;
+	const containerResizeObserver = new ResizeObserver(() => {
+		if (containerResizeTimer) clearTimeout(containerResizeTimer);
+		containerResizeTimer = setTimeout(() => {
+			containerResizeTimer = null;
+			// Recalculate split pane widths if there's an active terminal
+			if (activeTerminalId) {
+				activateTerminal(activeTerminalId);
+			}
+		}, 50);
+	});
+	containerResizeObserver.observe(terminalsContainer);
 
 	// Read theme colors from VS Code CSS variables
 	function getVSCodeThemeColors(): TerminalTheme {
@@ -1050,6 +1069,7 @@ interface PanelTerminal {
 	// | ctrl+shift+` (newTerm)  | NO - doesn't conflict|
 	// | cmd+shift+[ (prevTab)   | NO - VS Code handles |
 	// | cmd+shift+] (nextTab)   | NO - VS Code handles |
+	// | cmd+\ (splitTerminal)   | YES - intercept here |
 	// ==========================================================================
 	document.addEventListener(
 		"keydown",
@@ -1061,6 +1081,24 @@ interface PanelTerminal {
 				vscode.postMessage({
 					type: "toggle-panel-requested",
 				} satisfies PanelWebviewMessage);
+				return;
+			}
+
+			// Cmd+\ (Mac) or Ctrl+\ (Windows/Linux) - split terminal
+			if (
+				e.key === "\\" &&
+				(e.metaKey || e.ctrlKey) &&
+				!e.shiftKey &&
+				!e.altKey
+			) {
+				e.preventDefault();
+				e.stopPropagation();
+				if (activeTerminalId) {
+					vscode.postMessage({
+						type: "split-requested",
+						terminalId: activeTerminalId,
+					} satisfies PanelWebviewMessage);
+				}
 				return;
 			}
 		},
