@@ -44,16 +44,17 @@ export class ContextMenu {
 	private submenuHideTimer: ReturnType<typeof setTimeout> | null = null;
 	private events: ContextMenuEvents;
 	private groups: TerminalGroup[] = [];
+	private boundHandleOutsideClick: (e: Event) => void;
 
 	constructor(events: ContextMenuEvents) {
 		this.events = events;
 
+		// Store bound handler for proper cleanup in destroy()
+		this.boundHandleOutsideClick = this.handleOutsideClick.bind(this);
+
 		// Close menu on click outside
-		document.addEventListener("click", this.handleOutsideClick.bind(this));
-		document.addEventListener(
-			"contextmenu",
-			this.handleOutsideClick.bind(this),
-		);
+		document.addEventListener("click", this.boundHandleOutsideClick);
+		document.addEventListener("contextmenu", this.boundHandleOutsideClick);
 	}
 
 	/** Update available groups for Join submenu */
@@ -417,10 +418,7 @@ export class ContextMenu {
 	/** Destroy the context menu */
 	destroy(): void {
 		this.hide();
-		document.removeEventListener("click", this.handleOutsideClick.bind(this));
-		document.removeEventListener(
-			"contextmenu",
-			this.handleOutsideClick.bind(this),
-		);
+		document.removeEventListener("click", this.boundHandleOutsideClick);
+		document.removeEventListener("contextmenu", this.boundHandleOutsideClick);
 	}
 }

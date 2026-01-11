@@ -56,6 +56,8 @@ interface PanelTerminal {
 	container: HTMLElement;
 	currentCwd?: string;
 	searchController: SearchController;
+	themeObserver: MutationObserver;
+	resizeObserver: ResizeObserver;
 }
 
 // Wrap in async IIFE for top-level await
@@ -632,6 +634,8 @@ interface PanelTerminal {
 			fitAddon,
 			container: wrapper,
 			searchController,
+			themeObserver,
+			resizeObserver,
 		};
 		terminals.set(id, panelTerminal);
 
@@ -752,6 +756,10 @@ interface PanelTerminal {
 	function removeTerminal(id: TerminalId): void {
 		const terminal = terminals.get(id);
 		if (!terminal) return;
+
+		// Clean up observers
+		terminal.themeObserver.disconnect();
+		terminal.resizeObserver.disconnect();
 
 		// Clean up search controller
 		terminal.searchController.destroy();

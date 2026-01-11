@@ -427,6 +427,21 @@ export class TerminalList {
 			}
 		} else {
 			// Normal click: single selection and activate terminal
+			// But if the terminal is in the already-visible group, do nothing
+			// (user must click in the terminal pane to focus it)
+			const clickedItem = this.state.items.find((i) => i.id === id);
+			if (clickedItem?.groupId && this.state.selectedTerminalIds.size > 0) {
+				// Check if any selected terminal is in the same group
+				for (const selectedId of this.state.selectedTerminalIds) {
+					const selectedItem = this.state.items.find(
+						(i) => i.id === selectedId,
+					);
+					if (selectedItem?.groupId === clickedItem.groupId) {
+						// Group already visible, no effect
+						return;
+					}
+				}
+			}
 			this.state.selectedTerminalIds.clear();
 			this.state.selectedTerminalIds.add(id);
 			this.state.lastSelectedId = id;
@@ -518,22 +533,19 @@ export class TerminalList {
 			this.handleItemClick(item.id, e);
 		});
 
-		// Right-click context menu
+		// Right-click context menu (does not change selection per spec)
 		itemEl.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
 			e.stopPropagation(); // Prevent document-level handler from closing menu
 
-			// If right-clicking on an unselected item, select it first
-			if (!this.state.selectedTerminalIds.has(item.id)) {
-				this.state.selectedTerminalIds.clear();
-				this.state.selectedTerminalIds.add(item.id);
-				this.state.lastSelectedId = item.id;
-				this.render();
-			}
-
-			// Show appropriate context menu based on selection count
-			const selectedIds = Array.from(this.state.selectedTerminalIds);
-			if (selectedIds.length > 1) {
+			// Show context menu for the right-clicked item
+			// If item is part of multi-selection, show multi-select menu for all selected
+			// Otherwise show single-item menu for the clicked item only
+			if (
+				this.state.selectedTerminalIds.has(item.id) &&
+				this.state.selectedTerminalIds.size > 1
+			) {
+				const selectedIds = Array.from(this.state.selectedTerminalIds);
 				this.events.onMultiSelectContextMenu(selectedIds, e.clientX, e.clientY);
 			} else {
 				this.events.onContextMenu(item.id, e.clientX, e.clientY);
