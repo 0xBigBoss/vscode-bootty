@@ -23,6 +23,7 @@ export interface TerminalListState {
 	selectedTerminalIds: Set<TerminalId>; // Multi-select support
 	focusedTerminalId: TerminalId | null;
 	lastSelectedId: TerminalId | null; // For shift-click range selection
+	activeTerminalId: TerminalId | null; // Currently displayed terminal (for group visibility)
 }
 
 /** Events emitted by the terminal list */
@@ -75,6 +76,7 @@ export class TerminalList {
 			selectedTerminalIds: new Set(),
 			focusedTerminalId: null,
 			lastSelectedId: null,
+			activeTerminalId: null,
 		};
 
 		// Create list container
@@ -185,6 +187,18 @@ export class TerminalList {
 	/** Set the focused terminal */
 	setFocused(id: TerminalId | null): void {
 		this.state.focusedTerminalId = id;
+		this.render();
+	}
+
+	/** Set the active (displayed) terminal - for external activation */
+	setActive(id: TerminalId | null): void {
+		this.state.activeTerminalId = id;
+		if (id) {
+			// Also update selection to match active terminal
+			this.state.selectedTerminalIds.clear();
+			this.state.selectedTerminalIds.add(id);
+			this.state.lastSelectedId = id;
+		}
 		this.render();
 	}
 
@@ -430,21 +444,20 @@ export class TerminalList {
 			// But if the terminal is in the already-visible group, do nothing
 			// (user must click in the terminal pane to focus it)
 			const clickedItem = this.state.items.find((i) => i.id === id);
-			if (clickedItem?.groupId && this.state.selectedTerminalIds.size > 0) {
-				// Check if any selected terminal is in the same group
-				for (const selectedId of this.state.selectedTerminalIds) {
-					const selectedItem = this.state.items.find(
-						(i) => i.id === selectedId,
-					);
-					if (selectedItem?.groupId === clickedItem.groupId) {
-						// Group already visible, no effect
-						return;
-					}
+			if (clickedItem?.groupId && this.state.activeTerminalId) {
+				// Check if active terminal is in the same group as clicked terminal
+				const activeItem = this.state.items.find(
+					(i) => i.id === this.state.activeTerminalId,
+				);
+				if (activeItem?.groupId === clickedItem.groupId) {
+					// Group already visible, no effect
+					return;
 				}
 			}
 			this.state.selectedTerminalIds.clear();
 			this.state.selectedTerminalIds.add(id);
 			this.state.lastSelectedId = id;
+			this.state.activeTerminalId = id;
 			this.state.focusedTerminalId = null;
 			this.render();
 			this.events.onSelect(id);

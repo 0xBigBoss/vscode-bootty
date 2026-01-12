@@ -718,6 +718,9 @@ interface PanelTerminal {
 
 		activeTerminalId = id;
 
+		// Sync terminal list state (for external activations like keyboard nav, initial load)
+		terminalList.setActive(id);
+
 		// Get all terminals that should be visible (entire group or just this terminal)
 		const visibleIds = getVisibleTerminalIds(id);
 
