@@ -3,10 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{cspSource}} 'unsafe-inline' 'wasm-unsafe-eval'; style-src {{cspSource}} 'unsafe-inline'; img-src {{cspSource}} data:; font-src {{cspSource}}; connect-src {{cspSource}};">
+  <link rel="stylesheet" href="{{codiconsUri}}">
   <link rel="stylesheet" href="{{stylesUri}}">
 </head>
 <body data-wasm-url="{{wasmUri}}">
-  <div id="terminals-container"></div>
+  <!-- Main panel container with terminal area and list -->
+  <div id="panel-container">
+    <!-- Terminal display area (left) -->
+    <div id="terminals-container"></div>
+    <!-- Terminal list (right, resizable) -->
+    <div id="terminal-list-container"></div>
+  </div>
   <script src="{{ghosttyWebJsUri}}"></script>
   <script src="{{mainJsUri}}"></script>
 </body>

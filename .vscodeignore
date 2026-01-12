@@ -7,12 +7,14 @@
 !CHANGELOG.md
 !LICENSE
 !images/**
+!assets/**
 !out/**/*.js
 !out/**/*.css
 !out/**/*.html
 
 # Include runtime dependencies
 !node_modules/@0xbigboss/ghostty-web/**
+!node_modules/@vscode/codicons/dist/**
 !node_modules/node-pty/package.json
 !node_modules/node-pty/LICENSE
 !node_modules/node-pty/lib/**

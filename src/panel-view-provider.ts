@@ -5,7 +5,7 @@ import type {
 	PanelExtensionMessage,
 	PanelWebviewMessage,
 } from "./types/messages";
-import type { PanelTab, TerminalId } from "./types/terminal";
+import type { TerminalId } from "./types/terminal";
 
 /** Callback for routing messages from panel webview to terminal manager */
 export type PanelMessageHandler = (message: PanelWebviewMessage) => void;
@@ -20,11 +20,6 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView;
 	private _isReady = false; // True after panel-ready received
 	private _messageQueue: PanelExtensionMessage[] = []; // Queue for messages before ready
-	private _pendingTerminals: Array<{
-		id: TerminalId;
-		title: string;
-		makeActive: boolean;
-	}> = [];
 	private _messageHandler?: PanelMessageHandler;
 	private _disposables: vscode.Disposable[] = [];
 
@@ -38,7 +33,7 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	/** Called by VS Code when the panel view is opened */
 	resolveWebviewView(
 		webviewView: vscode.WebviewView,
-		context: vscode.WebviewViewResolveContext,
+		_context: vscode.WebviewViewResolveContext,
 		_token: vscode.CancellationToken,
 	): void {
 		this._view = webviewView;
@@ -55,23 +50,21 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 					"ghostty-web",
 					"dist",
 				),
+				vscode.Uri.joinPath(
+					this._extensionUri,
+					"node_modules",
+					"@vscode",
+					"codicons",
+					"dist",
+				),
 			],
 		};
 
 		webviewView.webview.html = this._getHtml(webviewView.webview);
 
-		// Restore state from previous session if available
-		const previousState = context.state as { tabs?: PanelTab[] } | undefined;
-		if (previousState?.tabs && previousState.tabs.length > 0) {
-			// Queue pending terminals to recreate after panel-ready
-			for (const tab of previousState.tabs) {
-				this._pendingTerminals.push({
-					id: tab.id,
-					title: tab.title,
-					makeActive: tab.active,
-				});
-			}
-		}
+		// NOTE: State restoration is now handled by the extension via hydrate-state message.
+		// The webview waits for the extension to send add-tab messages for each terminal.
+		// See specs/webview-terminal-list.spec.md for the hydration flow.
 
 		// Handle visibility changes - flush queue when visible
 		this._disposables.push(
@@ -102,15 +95,8 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 					if (message.type === "panel-ready") {
 						this._isReady = true;
 						this._flushMessageQueue();
-						// Restore terminals from saved state with metadata
-						for (const pending of this._pendingTerminals) {
-							this._messageHandler?.({
-								type: "new-tab-requested-with-title",
-								title: pending.title,
-								makeActive: pending.makeActive,
-							});
-						}
-						this._pendingTerminals = [];
+						// NOTE: Terminal restoration is now handled by the extension.
+						// The extension sends hydrate-state followed by add-tab messages.
 					}
 					// Handle toggle-panel-requested by executing the toggle command
 					if (message.type === "toggle-panel-requested") {
@@ -143,12 +129,26 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** Add a terminal tab to the panel */
-	addTerminal(id: TerminalId, title: string, makeActive: boolean): void {
+	addTerminal(
+		id: TerminalId,
+		title: string,
+		makeActive: boolean,
+		options?: {
+			icon?: string;
+			color?: string;
+			groupId?: string;
+			insertAfter?: TerminalId;
+		},
+	): void {
 		this.postMessage({
 			type: "add-tab",
 			terminalId: id,
 			title,
 			makeActive,
+			icon: options?.icon,
+			color: options?.color,
+			groupId: options?.groupId,
+			insertAfter: options?.insertAfter,
 		});
 	}
 
@@ -221,6 +221,13 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			"ghostty-web",
 			"dist",
 		);
+		const codiconsPath = path.join(
+			extensionPath,
+			"node_modules",
+			"@vscode",
+			"codicons",
+			"dist",
+		);
 
 		const ghosttyWebJsUri = webview.asWebviewUri(
 			vscode.Uri.file(path.join(ghosttyWebPath, "ghostty-web.umd.cjs")),
@@ -238,6 +245,9 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 				path.join(extensionPath, "out", "webview", "panel-styles.css"),
 			),
 		);
+		const codiconsUri = webview.asWebviewUri(
+			vscode.Uri.file(path.join(codiconsPath, "codicon.css")),
+		);
 
 		// Read template and replace placeholders
 		const templatePath = path.join(
@@ -253,7 +263,8 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			.replace(/\{\{wasmUri\}\}/g, wasmUri.toString())
 			.replace(/\{\{ghosttyWebJsUri\}\}/g, ghosttyWebJsUri.toString())
 			.replace(/\{\{mainJsUri\}\}/g, mainJsUri.toString())
-			.replace(/\{\{stylesUri\}\}/g, stylesUri.toString());
+			.replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
+			.replace(/\{\{codiconsUri\}\}/g, codiconsUri.toString());
 
 		return html;
 	}

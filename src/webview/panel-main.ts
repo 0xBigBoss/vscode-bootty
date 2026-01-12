@@ -20,13 +20,16 @@ import type {
 	PanelExtensionMessage,
 	PanelWebviewMessage,
 	RuntimeConfig,
+	TerminalGroup,
 	TerminalTheme,
 } from "../types/messages";
 import type { TerminalId } from "../types/terminal";
+import { ContextMenu } from "./context-menu";
 import {
 	createSearchController,
 	type SearchController,
 } from "./search-controller";
+import { TerminalList, type TerminalListItem } from "./terminal-list";
 
 // Declare VS Code API (provided by webview host)
 declare function acquireVsCodeApi(): {
@@ -53,6 +56,8 @@ interface PanelTerminal {
 	container: HTMLElement;
 	currentCwd?: string;
 	searchController: SearchController;
+	themeObserver: MutationObserver;
+	resizeObserver: ResizeObserver;
 }
 
 // Wrap in async IIFE for top-level await
@@ -125,6 +130,179 @@ interface PanelTerminal {
 
 	// DOM elements
 	const terminalsContainer = document.getElementById("terminals-container")!;
+	const terminalListContainer = document.getElementById(
+		"terminal-list-container",
+	)!;
+
+	// Terminal groups for split terminal support
+	const groups = new Map<string, TerminalGroup>();
+
+	// Initialize terminal list component
+	const terminalList = new TerminalList(
+		terminalListContainer,
+		{
+			onSelect: (id) => {
+				// Update selection and notify extension
+				terminalList.setSelected(id);
+				activateTerminal(id);
+				vscode.postMessage({
+					type: "terminal-selected",
+					terminalId: id,
+				} satisfies PanelWebviewMessage);
+			},
+			onClose: (id) => {
+				vscode.postMessage({
+					type: "tab-close-requested",
+					terminalId: id,
+				} satisfies PanelWebviewMessage);
+			},
+			onSplit: (id) => {
+				vscode.postMessage({
+					type: "split-requested",
+					terminalId: id,
+				} satisfies PanelWebviewMessage);
+			},
+			onContextMenu: (id, x, y) => {
+				const terminal = terminals.get(id);
+				if (!terminal) return;
+
+				// Find group ID for this terminal
+				let terminalGroupId: string | undefined;
+				for (const [gid, group] of groups) {
+					if (group.terminals.includes(id)) {
+						terminalGroupId = gid;
+						break;
+					}
+				}
+
+				// Build group name map for context menu
+				const groupNames = new Map<string, string>();
+				for (const [groupId, group] of groups) {
+					const names = group.terminals
+						.map((tid) => terminals.get(tid)?.title || "Terminal")
+						.join(", ");
+					groupNames.set(groupId, names);
+				}
+
+				contextMenu.setGroups(Array.from(groups.values()));
+				contextMenu.show(
+					id,
+					x,
+					y,
+					!!terminalGroupId,
+					terminalGroupId,
+					groupNames,
+				);
+			},
+			onMultiSelectContextMenu: (ids, x, y) => {
+				contextMenu.showMultiSelect(ids, x, y);
+			},
+			onReorder: (ids) => {
+				vscode.postMessage({
+					type: "terminals-reordered",
+					terminalIds: ids,
+				} satisfies PanelWebviewMessage);
+			},
+			onGroupReorder: (groupId, terminalIds) => {
+				vscode.postMessage({
+					type: "group-reordered",
+					groupId,
+					terminalIds,
+				} satisfies PanelWebviewMessage);
+			},
+			onWidthChange: (width) => {
+				vscode.postMessage({
+					type: "list-width-changed",
+					width,
+				} satisfies PanelWebviewMessage);
+			},
+			onNewTerminal: () => {
+				vscode.postMessage({
+					type: "new-tab-requested",
+				} satisfies PanelWebviewMessage);
+			},
+		},
+		180, // Default width
+	);
+
+	// Initialize context menu
+	const contextMenu = new ContextMenu({
+		onSplit: (id) => {
+			vscode.postMessage({
+				type: "split-requested",
+				terminalId: id,
+			} satisfies PanelWebviewMessage);
+		},
+		onUnsplit: (id) => {
+			vscode.postMessage({
+				type: "unsplit-requested",
+				terminalId: id,
+			} satisfies PanelWebviewMessage);
+		},
+		onJoin: (id, targetGroupId) => {
+			vscode.postMessage({
+				type: "join-requested",
+				terminalId: id,
+				targetGroupId,
+			} satisfies PanelWebviewMessage);
+		},
+		onColorPicker: (id) => {
+			// Request extension to show color picker
+			vscode.postMessage({
+				type: "color-picker-requested",
+				terminalId: id,
+			} satisfies PanelWebviewMessage);
+		},
+		onIconPicker: (id) => {
+			// Request extension to show icon picker
+			vscode.postMessage({
+				type: "icon-picker-requested",
+				terminalId: id,
+			} satisfies PanelWebviewMessage);
+		},
+		onRename: (id) => {
+			// Send request to extension to show VS Code input box
+			vscode.postMessage({
+				type: "rename-requested",
+				terminalId: id,
+			} satisfies PanelWebviewMessage);
+		},
+		onKill: (id) => {
+			vscode.postMessage({
+				type: "tab-close-requested",
+				terminalId: id,
+			} satisfies PanelWebviewMessage);
+		},
+		onGroupSelected: (ids) => {
+			vscode.postMessage({
+				type: "group-selected-requested",
+				terminalIds: ids,
+			} satisfies PanelWebviewMessage);
+		},
+		onKillSelected: (ids) => {
+			// Kill each selected terminal
+			for (const id of ids) {
+				vscode.postMessage({
+					type: "tab-close-requested",
+					terminalId: id,
+				} satisfies PanelWebviewMessage);
+			}
+		},
+	});
+
+	// ResizeObserver on terminals container to recalculate split pane widths
+	let containerResizeTimer: ReturnType<typeof setTimeout> | null = null;
+	const containerResizeObserver = new ResizeObserver(() => {
+		if (containerResizeTimer) clearTimeout(containerResizeTimer);
+		containerResizeTimer = setTimeout(() => {
+			containerResizeTimer = null;
+			// Recalculate split pane widths if there's an active terminal
+			if (activeTerminalId) {
+				activateTerminal(activeTerminalId);
+			}
+		}, 50);
+	});
+	containerResizeObserver.observe(terminalsContainer);
 
 	// Read theme colors from VS Code CSS variables
 	function getVSCodeThemeColors(): TerminalTheme {
@@ -358,23 +536,17 @@ interface PanelTerminal {
 			vscode.postMessage({ type: "terminal-bell", terminalId: id });
 		});
 
-		// Resize handling
+		// Resize handling - when container resizes, fit all visible terminals in group
 		let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 		const resizeObserver = new ResizeObserver(() => {
 			if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
 			resizeDebounceTimer = setTimeout(() => {
 				resizeDebounceTimer = null;
-				if (activeTerminalId === id) {
-					try {
-						fitAddon.fit();
-						vscode.postMessage({
-							type: "terminal-resize",
-							terminalId: id,
-							cols: term.cols,
-							rows: term.rows,
-						});
-					} catch (err) {
-						console.warn("[bootty] Resize error:", err);
+				// Only handle resize if this terminal is visible (active or in active group)
+				if (activeTerminalId) {
+					const visibleIds = getVisibleTerminalIds(activeTerminalId);
+					if (visibleIds.includes(id)) {
+						fitVisibleTerminals(visibleIds);
 					}
 				}
 			}, 150);
@@ -445,6 +617,13 @@ interface PanelTerminal {
 			}
 		});
 
+		// Click handler to focus terminal when clicking in its pane
+		container.addEventListener("mousedown", () => {
+			// Focus this terminal and update list
+			term.focus?.();
+			terminalList.setFocused(id);
+		});
+
 		// Create search controller for this terminal
 		const searchController = createSearchController(term);
 
@@ -455,45 +634,121 @@ interface PanelTerminal {
 			fitAddon,
 			container: wrapper,
 			searchController,
+			themeObserver,
+			resizeObserver,
 		};
 		terminals.set(id, panelTerminal);
 
 		return panelTerminal;
 	}
 
-	// Activate a terminal (show it, hide others)
+	/** Get the group ID for a terminal, if it's in a group */
+	function getTerminalGroupId(terminalId: TerminalId): string | undefined {
+		for (const [groupId, group] of groups) {
+			if (group.terminals.includes(terminalId)) {
+				return groupId;
+			}
+		}
+		return undefined;
+	}
+
+	/** Get all terminal IDs that should be visible when a terminal is selected */
+	function getVisibleTerminalIds(selectedId: TerminalId): TerminalId[] {
+		const groupId = getTerminalGroupId(selectedId);
+		if (groupId) {
+			const group = groups.get(groupId);
+			return group ? [...group.terminals] : [selectedId];
+		}
+		return [selectedId];
+	}
+
+	/** Fit all visible terminals and send resize messages */
+	function fitVisibleTerminals(visibleIds: TerminalId[]): void {
+		const numPanes = visibleIds.length;
+		if (numPanes === 0) return;
+
+		// Calculate pane width (equal distribution)
+		const containerWidth = terminalsContainer.clientWidth;
+		const dividerWidth = 1; // 1px border between panes
+		const paneWidth =
+			(containerWidth - (numPanes - 1) * dividerWidth) / numPanes;
+
+		for (let i = 0; i < visibleIds.length; i++) {
+			const id = visibleIds[i];
+			const terminal = terminals.get(id);
+			if (!terminal) continue;
+
+			const wrapper = terminal.container;
+
+			// Position pane for split layout
+			if (numPanes > 1) {
+				wrapper.classList.add("split-pane");
+				wrapper.style.left = `${i * (paneWidth + dividerWidth)}px`;
+				wrapper.style.width = `${paneWidth}px`;
+			} else {
+				wrapper.classList.remove("split-pane");
+				wrapper.style.left = "";
+				wrapper.style.width = "";
+			}
+
+			// Fit terminal and send resize
+			try {
+				// biome-ignore lint/suspicious/noFocusedTests: This is xterm FitAddon.fit(), not a test
+				(terminal.fitAddon as unknown as { fit: () => void }).fit();
+				const term = terminal.term as unknown as {
+					cols: number;
+					rows: number;
+				};
+				vscode.postMessage({
+					type: "terminal-resize",
+					terminalId: id,
+					cols: term.cols,
+					rows: term.rows,
+				});
+			} catch (err) {
+				console.warn("[bootty] Fit error:", err);
+			}
+		}
+	}
+
+	// Activate a terminal (show it and its group members side-by-side)
 	function activateTerminal(id: TerminalId): void {
 		const terminal = terminals.get(id);
 		if (!terminal) return;
 
 		activeTerminalId = id;
 
-		// Update terminal visibility
+		// Sync terminal list state (for external activations like keyboard nav, initial load)
+		terminalList.setActive(id);
+
+		// Get all terminals that should be visible (entire group or just this terminal)
+		const visibleIds = getVisibleTerminalIds(id);
+
+		// Update terminal visibility - show all in group, hide others
 		for (const [tid, t] of terminals) {
-			t.container.classList.toggle("active", tid === id);
+			const isVisible = visibleIds.includes(tid);
+			t.container.classList.toggle("active", isVisible);
+			if (!isVisible) {
+				t.container.classList.remove("split-pane");
+			}
 		}
 
-		// Fit the active terminal and notify extension
+		// Fit visible terminals and send resize messages
 		requestAnimationFrame(() => {
 			requestAnimationFrame(() => {
-				try {
-					// biome-ignore lint/suspicious/noFocusedTests: This is xterm FitAddon.fit(), not a test
-					(terminal.fitAddon as unknown as { fit: () => void }).fit();
-					const term = terminal.term as unknown as {
-						cols: number;
-						rows: number;
-						focus?: () => void;
-					};
-					vscode.postMessage({
-						type: "tab-activated",
-						terminalId: id,
-						cols: term.cols,
-						rows: term.rows,
-					} satisfies PanelWebviewMessage);
-					term.focus?.();
-				} catch (err) {
-					console.warn("[bootty] Fit error:", err);
-				}
+				fitVisibleTerminals(visibleIds);
+
+				// Notify extension of activation (use the clicked terminal)
+				const term = terminal.term as unknown as {
+					cols: number;
+					rows: number;
+				};
+				vscode.postMessage({
+					type: "tab-activated",
+					terminalId: id,
+					cols: term.cols,
+					rows: term.rows,
+				} satisfies PanelWebviewMessage);
 			});
 		});
 
@@ -504,6 +759,10 @@ interface PanelTerminal {
 	function removeTerminal(id: TerminalId): void {
 		const terminal = terminals.get(id);
 		if (!terminal) return;
+
+		// Clean up observers
+		terminal.themeObserver.disconnect();
+		terminal.resizeObserver.disconnect();
 
 		// Clean up search controller
 		terminal.searchController.destroy();
@@ -554,6 +813,11 @@ interface PanelTerminal {
 		vscode.setState({ tabs, currentCwd } as WebviewState);
 	}
 
+	// Clear focus indicator when webview loses focus (VS Code focus change)
+	window.addEventListener("blur", () => {
+		terminalList.setFocused(null);
+	});
+
 	// Handle messages from extension
 	window.addEventListener("message", (e) => {
 		const msg = e.data as PanelExtensionMessage;
@@ -561,8 +825,18 @@ interface PanelTerminal {
 		switch (msg.type) {
 			case "add-tab": {
 				const terminal = createTerminal(msg.terminalId, msg.title);
+				// Add to terminal list UI
+				const listItem: TerminalListItem = {
+					id: msg.terminalId,
+					title: msg.title,
+					icon: msg.icon,
+					color: msg.color,
+					groupId: msg.groupId,
+				};
+				terminalList.addTerminal(listItem, msg.insertAfter);
 				if (msg.makeActive) {
 					activateTerminal(msg.terminalId);
+					terminalList.setSelected(msg.terminalId);
 				}
 				// Send terminal-ready
 				requestAnimationFrame(() => {
@@ -590,14 +864,17 @@ interface PanelTerminal {
 
 			case "remove-tab":
 				removeTerminal(msg.terminalId);
+				terminalList.removeTerminal(msg.terminalId);
 				break;
 
 			case "rename-tab":
 				renameTerminal(msg.terminalId, msg.title);
+				terminalList.renameTerminal(msg.terminalId, msg.title);
 				break;
 
 			case "activate-tab":
 				activateTerminal(msg.terminalId);
+				terminalList.setSelected(msg.terminalId);
 				break;
 
 			case "focus-terminal": {
@@ -606,10 +883,93 @@ interface PanelTerminal {
 					if (terminal) {
 						const term = terminal.term as unknown as { focus?: () => void };
 						term.focus?.();
+						terminalList.setFocused(activeTerminalId);
 					}
 				}
 				break;
 			}
+
+			case "hydrate-state":
+				// Restore list width from extension state
+				terminalList.setWidth(msg.listWidth);
+				break;
+
+			case "group-created":
+				groups.set(msg.group.id, msg.group);
+				terminalList.updateGroup(msg.group);
+				// Re-layout panes if active terminal is in this group
+				if (activeTerminalId) {
+					const activeGroup = getTerminalGroupId(activeTerminalId);
+					if (activeGroup === msg.group.id) {
+						activateTerminal(activeTerminalId);
+					}
+				}
+				break;
+
+			case "group-destroyed": {
+				// Check if active terminal was in this group BEFORE deleting
+				const destroyedGroup = groups.get(msg.groupId);
+				const wasInDestroyedGroup =
+					activeTerminalId &&
+					destroyedGroup?.terminals.includes(activeTerminalId);
+
+				groups.delete(msg.groupId);
+				terminalList.removeGroup(msg.groupId);
+
+				// Re-layout panes if active terminal was in destroyed group (now standalone)
+				if (wasInDestroyedGroup && activeTerminalId) {
+					activateTerminal(activeTerminalId);
+				}
+				break;
+			}
+
+			case "split-terminal":
+				// Update group membership for split terminal
+				terminalList.setTerminalGroup(msg.terminalId, msg.groupId);
+				// Re-run layout if active terminal is in this group
+				if (activeTerminalId) {
+					const activeGroup = getTerminalGroupId(activeTerminalId);
+					if (activeGroup === msg.groupId) {
+						activateTerminal(activeTerminalId);
+					}
+				}
+				break;
+
+			case "unsplit-terminal":
+				// Terminal is now standalone
+				terminalList.setTerminalGroup(msg.terminalId, undefined);
+				// Re-run layout if this terminal was active or in active group
+				if (activeTerminalId === msg.terminalId) {
+					activateTerminal(msg.terminalId);
+				} else if (activeTerminalId) {
+					// Remaining group members might need re-layout
+					activateTerminal(activeTerminalId);
+				}
+				break;
+
+			case "join-terminal":
+				// Terminal joined a group
+				terminalList.setTerminalGroup(msg.terminalId, msg.groupId);
+				// Re-run layout if active terminal is in the target group
+				if (activeTerminalId) {
+					const activeGroup = getTerminalGroupId(activeTerminalId);
+					if (activeGroup === msg.groupId) {
+						activateTerminal(activeTerminalId);
+					}
+				}
+				break;
+
+			case "update-terminal-color":
+				terminalList.setTerminalColor(msg.terminalId, msg.color);
+				break;
+
+			case "update-terminal-icon":
+				terminalList.setTerminalIcon(msg.terminalId, msg.icon);
+				break;
+
+			case "reorder-terminals":
+				terminalList.reorderItems(msg.terminalIds);
+				break;
 
 			case "show-search": {
 				if (activeTerminalId) {
@@ -741,6 +1101,7 @@ interface PanelTerminal {
 	// | ctrl+shift+` (newTerm)  | NO - doesn't conflict|
 	// | cmd+shift+[ (prevTab)   | NO - VS Code handles |
 	// | cmd+shift+] (nextTab)   | NO - VS Code handles |
+	// | cmd+\ (splitTerminal)   | YES - intercept here |
 	// ==========================================================================
 	document.addEventListener(
 		"keydown",
@@ -752,6 +1113,24 @@ interface PanelTerminal {
 				vscode.postMessage({
 					type: "toggle-panel-requested",
 				} satisfies PanelWebviewMessage);
+				return;
+			}
+
+			// Cmd+\ (Mac) or Ctrl+\ (Windows/Linux) - split terminal
+			if (
+				e.key === "\\" &&
+				(e.metaKey || e.ctrlKey) &&
+				!e.shiftKey &&
+				!e.altKey
+			) {
+				e.preventDefault();
+				e.stopPropagation();
+				if (activeTerminalId) {
+					vscode.postMessage({
+						type: "split-requested",
+						terminalId: activeTerminalId,
+					} satisfies PanelWebviewMessage);
+				}
 				return;
 			}
 		},

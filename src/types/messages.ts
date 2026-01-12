@@ -57,6 +57,12 @@ export type ExtensionMessage =
 	| { type: "update-config"; config: RuntimeConfig }
 	| { type: "show-search" };
 
+/** Terminal group for split terminals */
+export interface TerminalGroup {
+	id: string; // UUID v4
+	terminals: TerminalId[]; // Ordered list - first is leftmost pane
+}
+
 /** Extension -> Panel Webview (panel-specific messages) */
 export type PanelExtensionMessage =
 	| ExtensionMessage
@@ -65,11 +71,40 @@ export type PanelExtensionMessage =
 			terminalId: TerminalId;
 			title: string;
 			makeActive: boolean;
+			// NEW: optional customization fields for hydration
+			icon?: string;
+			color?: string;
+			groupId?: string;
+			// NEW: insert after this terminal (for splits)
+			insertAfter?: TerminalId;
 	  }
 	| { type: "remove-tab"; terminalId: TerminalId }
 	| { type: "rename-tab"; terminalId: TerminalId; title: string }
 	| { type: "activate-tab"; terminalId: TerminalId }
-	| { type: "focus-terminal" };
+	| { type: "focus-terminal" }
+	// NEW: State hydration on VS Code restart
+	| { type: "hydrate-state"; listWidth: number }
+	// NEW: Split terminal messages
+	| {
+			type: "split-terminal";
+			terminalId: TerminalId;
+			newTerminalId: TerminalId;
+			groupId: string;
+			insertAfter: TerminalId;
+	  }
+	| { type: "unsplit-terminal"; terminalId: TerminalId }
+	| { type: "join-terminal"; terminalId: TerminalId; groupId: string }
+	| { type: "group-created"; group: TerminalGroup }
+	| { type: "group-destroyed"; groupId: string }
+	// NEW: Customization messages
+	| {
+			type: "update-terminal-color";
+			terminalId: TerminalId;
+			color: string;
+	  }
+	| { type: "update-terminal-icon"; terminalId: TerminalId; icon: string }
+	// NEW: Reorder terminals (extension -> webview)
+	| { type: "reorder-terminals"; terminalIds: TerminalId[] };
 
 /** Webview -> Extension (editor terminals) */
 export type WebviewMessage =
@@ -114,8 +149,23 @@ export type PanelWebviewMessage =
 	  } // Tab switch with resize
 	| { type: "tab-close-requested"; terminalId: TerminalId }
 	| { type: "new-tab-requested" }
-	| { type: "new-tab-requested-with-title"; title: string; makeActive: boolean } // Restore with saved metadata
+	| { type: "rename-requested"; terminalId: TerminalId } // Request rename dialog
 	| { type: "tab-renamed"; terminalId: TerminalId; title: string } // User edited title
 	| { type: "toggle-panel-requested" } // Ctrl+` pressed in terminal
 	| { type: "next-tab-requested" } // Cmd+Shift+] pressed
-	| { type: "prev-tab-requested" }; // Cmd+Shift+[ pressed
+	| { type: "prev-tab-requested" } // Cmd+Shift+[ pressed
+	// NEW: Selection change from list click
+	| { type: "terminal-selected"; terminalId: TerminalId }
+	// NEW: Split terminal requests
+	| { type: "split-requested"; terminalId: TerminalId }
+	| { type: "unsplit-requested"; terminalId: TerminalId }
+	| { type: "join-requested"; terminalId: TerminalId; targetGroupId: string }
+	// NEW: Customization picker requests (opens VS Code quick pick)
+	| { type: "color-picker-requested"; terminalId: TerminalId }
+	| { type: "icon-picker-requested"; terminalId: TerminalId }
+	// NEW: Reorder and list width changes
+	| { type: "terminals-reordered"; terminalIds: TerminalId[] }
+	| { type: "group-reordered"; groupId: string; terminalIds: TerminalId[] }
+	| { type: "list-width-changed"; width: number }
+	// NEW: Multi-select group request
+	| { type: "group-selected-requested"; terminalIds: TerminalId[] };
