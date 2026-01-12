@@ -108,6 +108,7 @@ function getWorkspaceCwd(): string | undefined {
 /** Persisted terminal state for a single terminal */
 interface PersistedTerminalState {
 	id: TerminalId;
+	index?: number; // Terminal number for "Terminal N" naming
 	userTitle?: string;
 	icon?: string;
 	colorKey?: string; // Stored key (e.g., "red") - resolved to hex on load
@@ -1539,6 +1540,13 @@ export class TerminalManager implements vscode.Disposable {
 		// Store terminals for hydration (they'll be recreated when panel is ready)
 		this.persistedTerminals = state.terminals ?? [];
 
+		// Pre-populate usedIndices from persisted terminals to avoid duplicate numbering
+		for (const terminal of this.persistedTerminals) {
+			if (terminal.index !== undefined) {
+				this.usedIndices.add(terminal.index);
+			}
+		}
+
 		// Restore groups (but don't rebuild terminalToGroup yet - terminals don't exist)
 		// Groups will be sent to webview during hydration
 		for (const group of state.groups) {
@@ -1562,6 +1570,7 @@ export class TerminalManager implements vscode.Disposable {
 			if (instance && instance.location === "panel") {
 				terminals.push({
 					id,
+					index: instance.index,
 					userTitle: instance.title,
 					icon: instance.icon,
 					colorKey: instance.colorKey,
@@ -1652,7 +1661,8 @@ export class TerminalManager implements vscode.Disposable {
 		persisted: PersistedTerminalState,
 	): TerminalId | null {
 		const id = persisted.id; // Use the persisted ID
-		const index = this.getNextIndex();
+		// Use persisted index if available; indices were pre-populated in loadPersistedState
+		const index = persisted.index ?? this.getNextIndex();
 		const title = persisted.userTitle ?? `Terminal ${index}`;
 		// Resolve color: prefer colorKey (dynamic), fall back to legacy color (static)
 		const colorKey = persisted.colorKey;
