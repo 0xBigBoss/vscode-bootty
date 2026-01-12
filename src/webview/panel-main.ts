@@ -740,11 +740,16 @@ interface PanelTerminal {
 			requestAnimationFrame(() => {
 				fitVisibleTerminals(visibleIds);
 
-				// Notify extension of activation (use the clicked terminal)
+				// Focus the activated terminal
 				const term = terminal.term as unknown as {
 					cols: number;
 					rows: number;
+					focus?: () => void;
 				};
+				term.focus?.();
+				terminalList.setFocused(id);
+
+				// Notify extension of activation (use the clicked terminal)
 				vscode.postMessage({
 					type: "tab-activated",
 					terminalId: id,
