@@ -11,6 +11,8 @@ import {
 import {
 	getKeyHandlerResult,
 	isDeleteLineShortcut,
+	isLineEndShortcut,
+	isLineStartShortcut,
 	isMacPlatform,
 	isSearchShortcut,
 } from "../keybinding-utils";
@@ -303,6 +305,28 @@ interface WebviewState {
 					type: "terminal-input",
 					terminalId: TERMINAL_ID,
 					data: "\x15",
+				});
+				return true;
+			}
+			// Intercept Cmd+Left for beginning of line (Mac only)
+			if (isLineStartShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				// Send Ctrl+A (beginning of line)
+				vscode.postMessage({
+					type: "terminal-input",
+					terminalId: TERMINAL_ID,
+					data: "\x01",
+				});
+				return true;
+			}
+			// Intercept Cmd+Right for end of line (Mac only)
+			if (isLineEndShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				// Send Ctrl+E (end of line)
+				vscode.postMessage({
+					type: "terminal-input",
+					terminalId: TERMINAL_ID,
+					data: "\x05",
 				});
 				return true;
 			}

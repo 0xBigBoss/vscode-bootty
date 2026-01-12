@@ -13,6 +13,8 @@ import {
 import {
 	getKeyHandlerResult,
 	isDeleteLineShortcut,
+	isLineEndShortcut,
+	isLineStartShortcut,
 	isMacPlatform,
 	isNextTabShortcut,
 	isPrevTabShortcut,
@@ -527,6 +529,26 @@ interface PanelTerminal {
 					type: "terminal-input",
 					terminalId: id,
 					data: "\x15",
+				});
+				return true;
+			}
+			if (isLineStartShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				// Send Ctrl+A (beginning of line)
+				vscode.postMessage({
+					type: "terminal-input",
+					terminalId: id,
+					data: "\x01",
+				});
+				return true;
+			}
+			if (isLineEndShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				// Send Ctrl+E (end of line)
+				vscode.postMessage({
+					type: "terminal-input",
+					terminalId: id,
+					data: "\x05",
 				});
 				return true;
 			}

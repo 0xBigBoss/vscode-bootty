@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	getKeyHandlerResult,
 	isDeleteLineShortcut,
+	isLineEndShortcut,
+	isLineStartShortcut,
 	isMacPlatform,
 	isSearchShortcut,
 	type KeyEvent,
@@ -171,6 +173,98 @@ describe("keybinding-utils", () => {
 			};
 			expect(isDeleteLineShortcut(event, true)).toBe(false);
 			expect(isDeleteLineShortcut(event, false)).toBe(false);
+		});
+	});
+
+	describe("isLineStartShortcut", () => {
+		it("detects Cmd+Left on Mac", () => {
+			const event: KeyEvent = {
+				key: "ArrowLeft",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isLineStartShortcut(event, true)).toBe(true);
+		});
+
+		it("ignores Cmd+Shift+Left on Mac", () => {
+			const event: KeyEvent = {
+				key: "ArrowLeft",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: true,
+				altKey: false,
+			};
+			expect(isLineStartShortcut(event, true)).toBe(false);
+		});
+
+		it("returns false on Windows/Linux", () => {
+			const event: KeyEvent = {
+				key: "ArrowLeft",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isLineStartShortcut(event, false)).toBe(false);
+		});
+
+		it("ignores plain ArrowLeft", () => {
+			const event: KeyEvent = {
+				key: "ArrowLeft",
+				metaKey: false,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isLineStartShortcut(event, true)).toBe(false);
+		});
+	});
+
+	describe("isLineEndShortcut", () => {
+		it("detects Cmd+Right on Mac", () => {
+			const event: KeyEvent = {
+				key: "ArrowRight",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isLineEndShortcut(event, true)).toBe(true);
+		});
+
+		it("ignores Cmd+Shift+Right on Mac", () => {
+			const event: KeyEvent = {
+				key: "ArrowRight",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: true,
+				altKey: false,
+			};
+			expect(isLineEndShortcut(event, true)).toBe(false);
+		});
+
+		it("returns false on Windows/Linux", () => {
+			const event: KeyEvent = {
+				key: "ArrowRight",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isLineEndShortcut(event, false)).toBe(false);
+		});
+
+		it("ignores plain ArrowRight", () => {
+			const event: KeyEvent = {
+				key: "ArrowRight",
+				metaKey: false,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isLineEndShortcut(event, true)).toBe(false);
 		});
 	});
 

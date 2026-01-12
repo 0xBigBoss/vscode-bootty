@@ -72,6 +72,40 @@ export function isDeleteLineShortcut(event: KeyEvent, isMac: boolean): boolean {
 }
 
 /**
+ * Check if Cmd+Left for jump to beginning of line (Mac only)
+ * Windows/Linux users can use Ctrl+A or Home directly in the terminal
+ */
+export function isLineStartShortcut(event: KeyEvent, isMac: boolean): boolean {
+	if (isMac) {
+		return (
+			event.metaKey &&
+			!event.shiftKey &&
+			!event.altKey &&
+			!event.ctrlKey &&
+			event.key === "ArrowLeft"
+		);
+	}
+	return false;
+}
+
+/**
+ * Check if Cmd+Right for jump to end of line (Mac only)
+ * Windows/Linux users can use Ctrl+E or End directly in the terminal
+ */
+export function isLineEndShortcut(event: KeyEvent, isMac: boolean): boolean {
+	if (isMac) {
+		return (
+			event.metaKey &&
+			!event.shiftKey &&
+			!event.altKey &&
+			!event.ctrlKey &&
+			event.key === "ArrowRight"
+		);
+	}
+	return false;
+}
+
+/**
  * Determine how to handle a key event in the terminal
  *
  * On Mac:
