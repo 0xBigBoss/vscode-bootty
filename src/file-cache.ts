@@ -115,16 +115,34 @@ export function isWindowsPlatform(navigator: { platform: string }): boolean {
 }
 
 /**
- * Convert a file:// URI to a filesystem path
+ * Convert a file:// or vscode-remote:// URI to a filesystem path
  * Handles URL-encoded characters and platform differences
+ *
+ * Supported URI formats:
+ * - file:///path/to/file (Unix)
+ * - file:///C:/path/to/file (Windows)
+ * - vscode-remote://ssh-remote+hostname/path/to/file
+ * - vscode-remote://wsl+distro/path/to/file
+ * - vscode-remote://dev-container+id/path/to/file
  */
 export function fileUriToPath(uri: string): string | null {
-	if (!uri.startsWith("file://")) {
+	let path: string;
+
+	if (uri.startsWith("file://")) {
+		// Remove 'file://' prefix
+		path = uri.slice(7);
+	} else if (uri.startsWith("vscode-remote://")) {
+		// vscode-remote://authority/path -> extract path after authority
+		// Format: vscode-remote://ssh-remote+hostname/path/to/file
+		const withoutScheme = uri.slice(16); // Remove 'vscode-remote://'
+		const slashIndex = withoutScheme.indexOf("/");
+		if (slashIndex === -1) {
+			return null;
+		}
+		path = withoutScheme.slice(slashIndex);
+	} else {
 		return null;
 	}
-
-	// Remove 'file://' prefix
-	let path = uri.slice(7);
 
 	// URL-decode the path (handles %20 for spaces, etc.)
 	path = decodeURIComponent(path);

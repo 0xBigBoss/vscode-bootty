@@ -319,5 +319,43 @@ describe("file-cache", () => {
 				"/path/&ampersand.ts",
 			);
 		});
+
+		it("converts vscode-remote SSH URIs", () => {
+			expect(
+				fileUriToPath("vscode-remote://ssh-remote+myserver/home/user/file.ts"),
+			).toBe("/home/user/file.ts");
+			expect(
+				fileUriToPath(
+					"vscode-remote://ssh-remote+dev.example.com/var/www/app.js",
+				),
+			).toBe("/var/www/app.js");
+		});
+
+		it("converts vscode-remote WSL URIs", () => {
+			expect(
+				fileUriToPath("vscode-remote://wsl+Ubuntu/home/user/project/file.ts"),
+			).toBe("/home/user/project/file.ts");
+		});
+
+		it("converts vscode-remote dev-container URIs", () => {
+			expect(
+				fileUriToPath(
+					"vscode-remote://dev-container+abc123/workspace/src/main.ts",
+				),
+			).toBe("/workspace/src/main.ts");
+		});
+
+		it("decodes URL-encoded characters in vscode-remote URIs", () => {
+			expect(
+				fileUriToPath(
+					"vscode-remote://ssh-remote+server/path/with%20spaces/file.ts",
+				),
+			).toBe("/path/with spaces/file.ts");
+		});
+
+		it("returns null for malformed vscode-remote URIs", () => {
+			// Missing path
+			expect(fileUriToPath("vscode-remote://ssh-remote+server")).toBeNull();
+		});
 	});
 });
