@@ -2,7 +2,7 @@
 	"name": "bootty",
 	"displayName": "BooTTY",
 	"description": "Alternative terminal for VS Code powered by Ghostty's terminal emulation (libghostty-vt) via WebAssembly",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"publisher": "bigboss",
 	"license": "MIT",
 	"icon": "images/icon.png",
