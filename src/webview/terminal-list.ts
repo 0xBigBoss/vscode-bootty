@@ -244,6 +244,34 @@ export class TerminalList {
 				item.groupId = group.id;
 			}
 		}
+
+		// Reorder state.items to match the new group order
+		// Find where the group's first terminal appears in items
+		const groupTerminalSet = new Set(group.terminals);
+		const firstIndex = this.state.items.findIndex((i) =>
+			groupTerminalSet.has(i.id),
+		);
+		if (firstIndex !== -1) {
+			// Extract group items and non-group items
+			const groupItems = this.state.items.filter((i) =>
+				groupTerminalSet.has(i.id),
+			);
+			const beforeItems = this.state.items
+				.slice(0, firstIndex)
+				.filter((i) => !groupTerminalSet.has(i.id));
+			const afterItems = this.state.items
+				.slice(firstIndex)
+				.filter((i) => !groupTerminalSet.has(i.id));
+
+			// Reorder group items to match group.terminals order
+			const orderedGroupItems = group.terminals
+				.map((tid) => groupItems.find((i) => i.id === tid))
+				.filter((i): i is TerminalListItem => i !== undefined);
+
+			// Rebuild items array with group items in correct order
+			this.state.items = [...beforeItems, ...orderedGroupItems, ...afterItems];
+		}
+
 		this.render();
 	}
 

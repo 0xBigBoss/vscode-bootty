@@ -1132,8 +1132,25 @@ export class TerminalManager implements vscode.Disposable {
 	): void {
 		const group = this.groups.get(groupId);
 		if (!group) return;
+
 		// Update group's terminal order
 		group.terminals = terminalIds;
+
+		// Also update terminalOrder to reflect the new within-group order
+		// Find where this group's terminals are in terminalOrder and replace them
+		const groupTerminalSet = new Set(terminalIds);
+		const firstGroupIndex = this.terminalOrder.findIndex((id) =>
+			groupTerminalSet.has(id),
+		);
+		if (firstGroupIndex !== -1) {
+			// Remove all group terminals from their current positions
+			this.terminalOrder = this.terminalOrder.filter(
+				(id) => !groupTerminalSet.has(id),
+			);
+			// Insert them back in the new order at the original position
+			this.terminalOrder.splice(firstGroupIndex, 0, ...terminalIds);
+		}
+
 		// Send updated group back to webview so pane order updates
 		this.panelProvider.postMessage({
 			type: "group-created",
