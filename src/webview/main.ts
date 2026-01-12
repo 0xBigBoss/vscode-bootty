@@ -3,6 +3,7 @@
 // Import extracted utilities for testability (bundled by esbuild)
 import {
 	createFileCache,
+	extractPathsFromDataTransfer,
 	isWindowsPlatform,
 	quoteShellPath,
 	resolvePath as resolvePathUtil,
@@ -610,31 +611,19 @@ interface WebviewState {
 		e.stopPropagation();
 		container.classList.remove("drag-over");
 
-		// Get dropped files
-		const files = e.dataTransfer?.files;
-		if (!files || files.length === 0) return;
+		if (!e.dataTransfer) return;
 
-		// Build paths string (space-separated, quoted for shell)
-		// Uses extracted utility with platform-aware quoting
-		const paths: string[] = [];
-		for (let i = 0; i < files.length; i++) {
-			const file = files[i];
-			// In VS Code webviews, file.path contains the full filesystem path
-			// Note: This is a VS Code-specific extension to the File API
-			const path = (file as File & { path?: string }).path;
-			if (path) {
-				// Use platform-aware quoting (POSIX vs Windows)
-				paths.push(quoteShellPath(path, IS_WINDOWS));
-			}
-		}
-
-		if (paths.length > 0) {
-			// Send paths to terminal as user input
+		// Extract paths from both Finder drops and VS Code Explorer drops (Shift+drag)
+		const rawPaths = extractPathsFromDataTransfer(e.dataTransfer);
+		if (rawPaths.length > 0) {
+			const quotedPaths = rawPaths.map((p) => quoteShellPath(p, IS_WINDOWS));
 			vscode.postMessage({
 				type: "terminal-input",
 				terminalId: TERMINAL_ID,
-				data: paths.join(" "),
+				data: quotedPaths.join(" "),
 			});
+			// Focus terminal after drop
+			term.focus?.();
 		}
 	});
 })();

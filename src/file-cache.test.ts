@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	createFileCache,
+	fileUriToPath,
 	isAbsolutePath,
 	isWindowsPlatform,
 	quoteShellPath,
@@ -273,6 +274,50 @@ describe("file-cache", () => {
 			expect(isWindowsPlatform({ platform: "MacIntel" })).toBe(false);
 			expect(isWindowsPlatform({ platform: "Linux x86_64" })).toBe(false);
 			expect(isWindowsPlatform({ platform: "darwin" })).toBe(false);
+		});
+	});
+
+	describe("fileUriToPath", () => {
+		it("returns null for non-file URIs", () => {
+			expect(fileUriToPath("https://example.com")).toBeNull();
+			expect(fileUriToPath("/some/path")).toBeNull();
+			expect(fileUriToPath("")).toBeNull();
+		});
+
+		it("converts Unix file URIs", () => {
+			expect(fileUriToPath("file:///home/user/file.ts")).toBe(
+				"/home/user/file.ts",
+			);
+			expect(fileUriToPath("file:///Users/dev/project/src/main.ts")).toBe(
+				"/Users/dev/project/src/main.ts",
+			);
+		});
+
+		it("converts Windows file URIs", () => {
+			expect(fileUriToPath("file:///C:/Users/dev/file.ts")).toBe(
+				"C:/Users/dev/file.ts",
+			);
+			expect(fileUriToPath("file:///D:/Projects/app.js")).toBe(
+				"D:/Projects/app.js",
+			);
+		});
+
+		it("decodes URL-encoded characters", () => {
+			expect(fileUriToPath("file:///path/with%20spaces/file.ts")).toBe(
+				"/path/with spaces/file.ts",
+			);
+			expect(fileUriToPath("file:///C:/Program%20Files/app.exe")).toBe(
+				"C:/Program Files/app.exe",
+			);
+		});
+
+		it("handles special characters", () => {
+			expect(fileUriToPath("file:///path/%24variable/file.ts")).toBe(
+				"/path/$variable/file.ts",
+			);
+			expect(fileUriToPath("file:///path/%26ampersand.ts")).toBe(
+				"/path/&ampersand.ts",
+			);
 		});
 	});
 });

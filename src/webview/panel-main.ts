@@ -5,6 +5,7 @@
 
 import {
 	createFileCache,
+	extractPathsFromDataTransfer,
 	isWindowsPlatform,
 	quoteShellPath,
 	resolvePath as resolvePathUtil,
@@ -653,22 +654,20 @@ interface PanelTerminal {
 		container.addEventListener("drop", (e) => {
 			e.preventDefault();
 			container.classList.remove("drag-over");
-			const files = e.dataTransfer?.files;
-			if (!files || files.length === 0) return;
-			const paths: string[] = [];
-			for (let i = 0; i < files.length; i++) {
-				const file = files[i];
-				const path = (file as File & { path?: string }).path;
-				if (path) {
-					paths.push(quoteShellPath(path, IS_WINDOWS));
-				}
-			}
-			if (paths.length > 0) {
+			if (!e.dataTransfer) return;
+
+			// Extract paths from both Finder drops and VS Code Explorer drops (Shift+drag)
+			const rawPaths = extractPathsFromDataTransfer(e.dataTransfer);
+			if (rawPaths.length > 0) {
+				const quotedPaths = rawPaths.map((p) => quoteShellPath(p, IS_WINDOWS));
 				vscode.postMessage({
 					type: "terminal-input",
 					terminalId: id,
-					data: paths.join(" "),
+					data: quotedPaths.join(" "),
 				});
+				// Focus terminal after drop
+				term.focus?.();
+				terminalList.setFocused(id);
 			}
 		});
 

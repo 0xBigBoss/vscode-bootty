@@ -115,6 +115,75 @@ export function isWindowsPlatform(navigator: { platform: string }): boolean {
 }
 
 /**
+ * Convert a file:// URI to a filesystem path
+ * Handles URL-encoded characters and platform differences
+ */
+export function fileUriToPath(uri: string): string | null {
+	if (!uri.startsWith("file://")) {
+		return null;
+	}
+
+	// Remove 'file://' prefix
+	let path = uri.slice(7);
+
+	// URL-decode the path (handles %20 for spaces, etc.)
+	path = decodeURIComponent(path);
+
+	// On Unix, file:///path/to/file -> /path/to/file (3 slashes, path starts with /)
+	// On Windows, file:///C:/path -> C:/path (3 slashes, then drive letter)
+	// Check for Windows drive letter pattern
+	if (/^\/[a-zA-Z]:/.test(path)) {
+		// Remove leading slash for Windows paths: /C:/... -> C:/...
+		path = path.slice(1);
+	}
+
+	return path;
+}
+
+/**
+ * Extract file paths from a DataTransfer object
+ * Handles both Finder/external drops (via file.path) and VS Code Explorer drops (via text/uri-list)
+ */
+export function extractPathsFromDataTransfer(
+	dataTransfer: DataTransfer,
+): string[] {
+	const paths: string[] = [];
+
+	// First try: files from Finder/Desktop (VS Code adds .path to File objects)
+	const files = dataTransfer.files;
+	if (files && files.length > 0) {
+		for (let i = 0; i < files.length; i++) {
+			const file = files[i];
+			const path = (file as File & { path?: string }).path;
+			if (path) {
+				paths.push(path);
+			}
+		}
+	}
+
+	// Second try: text/uri-list format (VS Code Explorer drag + Shift key)
+	// Only if we didn't get paths from files
+	if (paths.length === 0) {
+		const uriList = dataTransfer.getData("text/uri-list");
+		if (uriList) {
+			// text/uri-list contains one URI per line, lines starting with # are comments
+			const lines = uriList.split(/\r?\n/);
+			for (const line of lines) {
+				const trimmed = line.trim();
+				if (trimmed && !trimmed.startsWith("#")) {
+					const filePath = fileUriToPath(trimmed);
+					if (filePath) {
+						paths.push(filePath);
+					}
+				}
+			}
+		}
+	}
+
+	return paths;
+}
+
+/**
  * Quote a shell path if it contains special characters
  * Uses POSIX single-quoting for Unix shells, double-quoting for Windows cmd.exe
  */
