@@ -906,10 +906,22 @@ interface PanelTerminal {
 				}
 				break;
 
-			case "group-destroyed":
+			case "group-destroyed": {
+				// Check if active terminal was in this group BEFORE deleting
+				const destroyedGroup = groups.get(msg.groupId);
+				const wasInDestroyedGroup =
+					activeTerminalId &&
+					destroyedGroup?.terminals.includes(activeTerminalId);
+
 				groups.delete(msg.groupId);
 				terminalList.removeGroup(msg.groupId);
+
+				// Re-layout panes if active terminal was in destroyed group (now standalone)
+				if (wasInDestroyedGroup && activeTerminalId) {
+					activateTerminal(activeTerminalId);
+				}
 				break;
+			}
 
 			case "split-terminal":
 				// Update group membership for split terminal
