@@ -359,14 +359,42 @@ interface WebviewState {
 	window.addEventListener("message", (e) => {
 		const msg = e.data as ExtensionMessage;
 		switch (msg.type) {
-			case "pty-data":
+			case "pty-data": {
+				// Preserve scroll position if user has scrolled up (viewportY > 0 means scrolled into history)
+				// viewportY is distance from bottom; when new lines are added, we must adjust by the delta
+				const termApi = term as unknown as {
+					getViewportY?: () => number;
+					getScrollbackLength?: () => number;
+					scrollToLine?: (line: number) => void;
+				};
+				const scrollOffset = termApi.getViewportY?.() ?? 0;
+				const scrollbackBefore = termApi.getScrollbackLength?.() ?? 0;
 				term.write(msg.data);
+				if (scrollOffset > 0 && termApi.scrollToLine) {
+					const scrollbackAfter = termApi.getScrollbackLength?.() ?? 0;
+					const delta = scrollbackAfter - scrollbackBefore;
+					termApi.scrollToLine(scrollOffset + delta);
+				}
 				break;
-			case "pty-exit":
+			}
+			case "pty-exit": {
+				const termApi = term as unknown as {
+					getViewportY?: () => number;
+					getScrollbackLength?: () => number;
+					scrollToLine?: (line: number) => void;
+				};
+				const scrollOffset = termApi.getViewportY?.() ?? 0;
+				const scrollbackBefore = termApi.getScrollbackLength?.() ?? 0;
 				term.write(
 					`\r\n\x1b[90m[Process exited with code ${msg.exitCode}]\x1b[0m\r\n`,
 				);
+				if (scrollOffset > 0 && termApi.scrollToLine) {
+					const scrollbackAfter = termApi.getScrollbackLength?.() ?? 0;
+					const delta = scrollbackAfter - scrollbackBefore;
+					termApi.scrollToLine(scrollOffset + delta);
+				}
 				break;
+			}
 			case "resize":
 				term.resize(msg.cols, msg.rows);
 				break;

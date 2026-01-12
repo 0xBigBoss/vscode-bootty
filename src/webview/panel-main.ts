@@ -1041,9 +1041,22 @@ interface PanelTerminal {
 			case "pty-data": {
 				const terminal = terminals.get(msg.terminalId);
 				if (terminal) {
-					(terminal.term as unknown as { write: (data: string) => void }).write(
-						msg.data,
-					);
+					const term = terminal.term as unknown as {
+						write: (data: string) => void;
+						getViewportY?: () => number;
+						getScrollbackLength?: () => number;
+						scrollToLine?: (line: number) => void;
+					};
+					// Preserve scroll position if user has scrolled up (viewportY > 0 means scrolled into history)
+					// viewportY is distance from bottom; when new lines are added, we must adjust by the delta
+					const scrollOffset = term.getViewportY?.() ?? 0;
+					const scrollbackBefore = term.getScrollbackLength?.() ?? 0;
+					term.write(msg.data);
+					if (scrollOffset > 0 && term.scrollToLine) {
+						const scrollbackAfter = term.getScrollbackLength?.() ?? 0;
+						const delta = scrollbackAfter - scrollbackBefore;
+						term.scrollToLine(scrollOffset + delta);
+					}
 				}
 				break;
 			}
@@ -1051,9 +1064,22 @@ interface PanelTerminal {
 			case "pty-exit": {
 				const terminal = terminals.get(msg.terminalId);
 				if (terminal) {
-					(terminal.term as unknown as { write: (data: string) => void }).write(
+					const term = terminal.term as unknown as {
+						write: (data: string) => void;
+						getViewportY?: () => number;
+						getScrollbackLength?: () => number;
+						scrollToLine?: (line: number) => void;
+					};
+					const scrollOffset = term.getViewportY?.() ?? 0;
+					const scrollbackBefore = term.getScrollbackLength?.() ?? 0;
+					term.write(
 						`\r\n\x1b[90m[Process exited with code ${msg.exitCode}]\x1b[0m\r\n`,
 					);
+					if (scrollOffset > 0 && term.scrollToLine) {
+						const scrollbackAfter = term.getScrollbackLength?.() ?? 0;
+						const delta = scrollbackAfter - scrollbackBefore;
+						term.scrollToLine(scrollOffset + delta);
+					}
 				}
 				break;
 			}
