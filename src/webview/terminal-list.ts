@@ -586,7 +586,10 @@ export class TerminalList {
 				this.state.selectedTerminalIds.has(item.id) &&
 				this.state.selectedTerminalIds.size > 1
 			) {
-				const selectedIds = Array.from(this.state.selectedTerminalIds);
+				// Sort selected IDs by their position in items (list order, not click order)
+				const selectedIds = this.state.items
+					.filter((i) => this.state.selectedTerminalIds.has(i.id))
+					.map((i) => i.id);
 				this.events.onMultiSelectContextMenu(selectedIds, e.clientX, e.clientY);
 			} else {
 				this.events.onContextMenu(item.id, e.clientX, e.clientY);

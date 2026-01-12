@@ -920,13 +920,13 @@ export class TerminalManager implements vscode.Disposable {
 			// Panel: just remove the tab, do NOT dispose the panel WebviewView
 			this.panelProvider.removeTerminal(id);
 
-			// Hide panel when last terminal is closed
+			// Auto-create new terminal when last terminal is closed (per spec)
 			const remainingPanelTerminals = [...this.terminals.values()].filter(
 				(t) => t.location === "panel",
 			);
 			if (remainingPanelTerminals.length === 0) {
-				// Close the bottom panel
-				vscode.commands.executeCommand("workbench.action.closePanel");
+				// Create a new terminal instead of closing the panel
+				this.createPanelTerminal();
 			}
 
 			// Persist state after terminal removal
@@ -953,60 +953,60 @@ export class TerminalManager implements vscode.Disposable {
 		fallback: string;
 	}> = [
 		{
-			id: "black",
-			label: "Black",
-			description: "terminal.ansiBlack",
-			themeKey: "black",
-			fallback: "#3d3d3d",
-		},
-		{
 			id: "red",
 			label: "Red",
 			description: "terminal.ansiRed",
 			themeKey: "red",
-			fallback: "#cd3131",
+			fallback: "#f14c4c",
 		},
 		{
-			id: "green",
-			label: "Green",
-			description: "terminal.ansiGreen",
-			themeKey: "green",
-			fallback: "#0dbc79",
+			id: "orange",
+			label: "Orange",
+			description: "terminal.ansiBrightRed",
+			themeKey: "brightRed",
+			fallback: "#f5a623",
 		},
 		{
 			id: "yellow",
 			label: "Yellow",
 			description: "terminal.ansiYellow",
 			themeKey: "yellow",
-			fallback: "#e5e510",
+			fallback: "#e2c541",
+		},
+		{
+			id: "green",
+			label: "Green",
+			description: "terminal.ansiGreen",
+			themeKey: "green",
+			fallback: "#4fb86e",
 		},
 		{
 			id: "blue",
 			label: "Blue",
 			description: "terminal.ansiBlue",
 			themeKey: "blue",
-			fallback: "#2472c8",
+			fallback: "#3b8eea",
+		},
+		{
+			id: "purple",
+			label: "Purple",
+			description: "terminal.ansiBrightMagenta",
+			themeKey: "brightMagenta",
+			fallback: "#a95ec7",
 		},
 		{
 			id: "magenta",
 			label: "Magenta",
 			description: "terminal.ansiMagenta",
 			themeKey: "magenta",
-			fallback: "#bc3fbc",
+			fallback: "#e3699e",
 		},
 		{
 			id: "cyan",
 			label: "Cyan",
 			description: "terminal.ansiCyan",
 			themeKey: "cyan",
-			fallback: "#11a8cd",
-		},
-		{
-			id: "white",
-			label: "White",
-			description: "terminal.ansiWhite",
-			themeKey: "white",
-			fallback: "#e5e5e5",
+			fallback: "#4ec9b0",
 		},
 	];
 
@@ -1284,6 +1284,18 @@ export class TerminalManager implements vscode.Disposable {
 		// Set group membership for all terminals
 		for (const id of validIds) {
 			this.terminalToGroup.set(id, groupId);
+		}
+
+		// Update terminalOrder: move all grouped terminals together at the first one's position
+		const groupedSet = new Set(validIds);
+		const firstIndex = this.terminalOrder.findIndex((id) => groupedSet.has(id));
+		if (firstIndex !== -1) {
+			// Remove all grouped terminals from their current positions
+			this.terminalOrder = this.terminalOrder.filter(
+				(id) => !groupedSet.has(id),
+			);
+			// Insert them back together at the first one's original position
+			this.terminalOrder.splice(firstIndex, 0, ...validIds);
 		}
 
 		// Send group-created message
@@ -1614,6 +1626,15 @@ export class TerminalManager implements vscode.Disposable {
 
 		// Clear persisted terminals (they've been recreated)
 		this.persistedTerminals = [];
+
+		// Auto-create a terminal if none exist (fresh start or all previously killed)
+		const panelTerminals = [...this.terminals.values()].filter(
+			(t) => t.location === "panel",
+		);
+		if (panelTerminals.length === 0) {
+			this.createPanelTerminal();
+			return; // createPanelTerminal handles activation
+		}
 
 		// Activate the saved active terminal
 		if (savedActiveId && this.terminals.has(savedActiveId)) {
