@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	getKeyHandlerResult,
+	isDeleteLineShortcut,
 	isMacPlatform,
 	isSearchShortcut,
 	type KeyEvent,
@@ -92,6 +93,84 @@ describe("keybinding-utils", () => {
 				altKey: false,
 			};
 			expect(isSearchShortcut(ctrlP, false)).toBe(false);
+		});
+	});
+
+	describe("isDeleteLineShortcut", () => {
+		it("detects Cmd+Backspace on Mac", () => {
+			const event: KeyEvent = {
+				key: "Backspace",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isDeleteLineShortcut(event, true)).toBe(true);
+		});
+
+		it("ignores Ctrl+Backspace on Mac", () => {
+			const event: KeyEvent = {
+				key: "Backspace",
+				metaKey: false,
+				ctrlKey: true,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isDeleteLineShortcut(event, true)).toBe(false);
+		});
+
+		it("ignores Cmd+Shift+Backspace on Mac", () => {
+			const event: KeyEvent = {
+				key: "Backspace",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: true,
+				altKey: false,
+			};
+			expect(isDeleteLineShortcut(event, true)).toBe(false);
+		});
+
+		it("ignores Cmd+Option+Backspace on Mac", () => {
+			const event: KeyEvent = {
+				key: "Backspace",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: true,
+			};
+			expect(isDeleteLineShortcut(event, true)).toBe(false);
+		});
+
+		it("returns false on Windows/Linux (use Ctrl+U directly)", () => {
+			const cmdBackspace: KeyEvent = {
+				key: "Backspace",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isDeleteLineShortcut(cmdBackspace, false)).toBe(false);
+
+			const ctrlBackspace: KeyEvent = {
+				key: "Backspace",
+				metaKey: false,
+				ctrlKey: true,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isDeleteLineShortcut(ctrlBackspace, false)).toBe(false);
+		});
+
+		it("ignores plain Backspace", () => {
+			const event: KeyEvent = {
+				key: "Backspace",
+				metaKey: false,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isDeleteLineShortcut(event, true)).toBe(false);
+			expect(isDeleteLineShortcut(event, false)).toBe(false);
 		});
 	});
 

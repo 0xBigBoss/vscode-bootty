@@ -54,6 +54,24 @@ export function isPrevTabShortcut(event: KeyEvent, isMac: boolean): boolean {
 }
 
 /**
+ * Check if Cmd+Backspace for delete line (Mac only)
+ * Windows/Linux users can use Ctrl+U directly in the terminal
+ */
+export function isDeleteLineShortcut(event: KeyEvent, isMac: boolean): boolean {
+	if (isMac) {
+		// Only match Cmd+Backspace without other modifiers (shift, alt, ctrl)
+		return (
+			event.metaKey &&
+			!event.shiftKey &&
+			!event.altKey &&
+			!event.ctrlKey &&
+			event.key === "Backspace"
+		);
+	}
+	return false;
+}
+
+/**
  * Determine how to handle a key event in the terminal
  *
  * On Mac:

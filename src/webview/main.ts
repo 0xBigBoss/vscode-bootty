@@ -9,6 +9,7 @@ import {
 } from "../file-cache";
 import {
 	getKeyHandlerResult,
+	isDeleteLineShortcut,
 	isMacPlatform,
 	isSearchShortcut,
 } from "../keybinding-utils";
@@ -293,10 +294,64 @@ interface WebviewState {
 				return true; // We handled it
 			}
 
+			// Intercept Cmd+Backspace for delete line (Mac only)
+			if (isDeleteLineShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				// Send Ctrl+U directly to PTY (bypasses term.input which needs wasUserInput:true)
+				vscode.postMessage({
+					type: "terminal-input",
+					terminalId: TERMINAL_ID,
+					data: "\x15",
+				});
+				return true;
+			}
+
 			// Delegate to extracted utility for consistent keybinding logic
 			return getKeyHandlerResult(event, IS_MAC, term.hasSelection?.() ?? false);
 		},
 	);
+
+	// Custom wheel handler for alternate screen (tmux/vim) with mouse tracking
+	// When mouse tracking is enabled, synthesize SGR mouse wheel sequences
+	term.attachCustomWheelEventHandler((event: WheelEvent) => {
+		// Only intercept on alternate screen WITH mouse tracking enabled
+		// Apps like tmux with `set -g mouse on` need SGR sequences
+		// Apps like less/vim without mouse mode need the default arrow-key fallback
+		if (term.buffer.active.type === "alternate" && term.hasMouseTracking()) {
+			// Mouse tracking enabled - synthesize wheel escape sequences
+			// Button 64 = wheel up, 65 = wheel down (SGR encoding)
+			const button = event.deltaY < 0 ? 64 : 65;
+			const lines = Math.min(Math.ceil(Math.abs(event.deltaY) / 33), 5);
+
+			// Compute cell coordinates from pixel position
+			const metrics = term.renderer?.getMetrics();
+			let col = 1,
+				row = 1;
+			if (metrics && metrics.width > 0 && metrics.height > 0) {
+				col = Math.max(
+					1,
+					Math.min(Math.floor(event.offsetX / metrics.width) + 1, term.cols),
+				);
+				row = Math.max(
+					1,
+					Math.min(Math.floor(event.offsetY / metrics.height) + 1, term.rows),
+				);
+			}
+
+			for (let i = 0; i < lines; i++) {
+				// SGR mouse format: CSI < button ; col ; row M
+				vscode.postMessage({
+					type: "terminal-input",
+					terminalId: TERMINAL_ID,
+					data: `\x1b[<${button};${col};${row}M`,
+				});
+			}
+			return true; // We handled it
+		}
+
+		// Let ghostty-web handle: normal screen scrolling OR alt-screen arrow-key fallback
+		return false;
+	});
 
 	// Register message listener BEFORE posting terminal-ready
 	// This ensures the ready-triggered flush doesn't arrive before handler exists

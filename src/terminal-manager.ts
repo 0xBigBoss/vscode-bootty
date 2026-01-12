@@ -920,13 +920,12 @@ export class TerminalManager implements vscode.Disposable {
 			// Panel: just remove the tab, do NOT dispose the panel WebviewView
 			this.panelProvider.removeTerminal(id);
 
-			// Auto-create new terminal when last terminal is closed (per spec)
+			// Hide panel when last terminal is closed
 			const remainingPanelTerminals = [...this.terminals.values()].filter(
 				(t) => t.location === "panel",
 			);
 			if (remainingPanelTerminals.length === 0) {
-				// Create a new terminal instead of closing the panel
-				this.createPanelTerminal();
+				vscode.commands.executeCommand("workbench.action.closePanel");
 			}
 
 			// Persist state after terminal removal
