@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	getKeyHandlerResult,
+	isClearScreenShortcut,
 	isDeleteLineShortcut,
 	isLineEndShortcut,
 	isLineStartShortcut,
@@ -265,6 +266,52 @@ describe("keybinding-utils", () => {
 				altKey: false,
 			};
 			expect(isLineEndShortcut(event, true)).toBe(false);
+		});
+	});
+
+	describe("isClearScreenShortcut", () => {
+		it("detects Cmd+K on Mac", () => {
+			const event: KeyEvent = {
+				key: "k",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isClearScreenShortcut(event, true)).toBe(true);
+		});
+
+		it("ignores Cmd+Shift+K on Mac", () => {
+			const event: KeyEvent = {
+				key: "k",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: true,
+				altKey: false,
+			};
+			expect(isClearScreenShortcut(event, true)).toBe(false);
+		});
+
+		it("returns false on Windows/Linux", () => {
+			const event: KeyEvent = {
+				key: "k",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isClearScreenShortcut(event, false)).toBe(false);
+		});
+
+		it("ignores plain K", () => {
+			const event: KeyEvent = {
+				key: "k",
+				metaKey: false,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+			};
+			expect(isClearScreenShortcut(event, true)).toBe(false);
 		});
 	});
 

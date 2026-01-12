@@ -106,6 +106,26 @@ export function isLineEndShortcut(event: KeyEvent, isMac: boolean): boolean {
 }
 
 /**
+ * Check if Cmd+K for clear screen (Mac only)
+ * Windows/Linux users can use Ctrl+L directly in the terminal
+ */
+export function isClearScreenShortcut(
+	event: KeyEvent,
+	isMac: boolean,
+): boolean {
+	if (isMac) {
+		return (
+			event.metaKey &&
+			!event.shiftKey &&
+			!event.altKey &&
+			!event.ctrlKey &&
+			event.key === "k"
+		);
+	}
+	return false;
+}
+
+/**
  * Determine how to handle a key event in the terminal
  *
  * On Mac:

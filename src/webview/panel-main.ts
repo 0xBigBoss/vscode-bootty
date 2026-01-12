@@ -12,6 +12,7 @@ import {
 } from "../file-cache";
 import {
 	getKeyHandlerResult,
+	isClearScreenShortcut,
 	isDeleteLineShortcut,
 	isLineEndShortcut,
 	isLineStartShortcut,
@@ -549,6 +550,16 @@ interface PanelTerminal {
 					type: "terminal-input",
 					terminalId: id,
 					data: "\x05",
+				});
+				return true;
+			}
+			if (isClearScreenShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				// Send Ctrl+L (clear screen)
+				vscode.postMessage({
+					type: "terminal-input",
+					terminalId: id,
+					data: "\x0c",
 				});
 				return true;
 			}

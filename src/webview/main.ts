@@ -10,6 +10,7 @@ import {
 } from "../file-cache";
 import {
 	getKeyHandlerResult,
+	isClearScreenShortcut,
 	isDeleteLineShortcut,
 	isLineEndShortcut,
 	isLineStartShortcut,
@@ -327,6 +328,17 @@ interface WebviewState {
 					type: "terminal-input",
 					terminalId: TERMINAL_ID,
 					data: "\x05",
+				});
+				return true;
+			}
+			// Intercept Cmd+K for clear screen (Mac only)
+			if (isClearScreenShortcut(event, IS_MAC)) {
+				event.preventDefault();
+				// Send Ctrl+L (clear screen)
+				vscode.postMessage({
+					type: "terminal-input",
+					terminalId: TERMINAL_ID,
+					data: "\x0c",
 				});
 				return true;
 			}
