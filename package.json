@@ -245,7 +245,7 @@
 		"postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
 	},
 	"dependencies": {
-		"@0xbigboss/ghostty-web": "^0.4.0",
+		"@0xbigboss/ghostty-web": "^0.5.0",
 		"@vscode/codicons": "^0.0.44",
 		"node-pty": "^1.0.0"
 	},

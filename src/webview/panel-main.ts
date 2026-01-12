@@ -447,6 +447,8 @@ interface PanelTerminal {
 		const termOptions: any = {
 			cols: 80,
 			rows: 24,
+			// Enable Option key as Meta on Mac for word navigation (Option+Left/Right)
+			macOptionIsMeta: IS_MAC,
 			onLinkClick: (url: string, event: MouseEvent) => {
 				if (event.ctrlKey || event.metaKey) {
 					// Use pre-compiled pattern for performance

@@ -204,10 +204,13 @@ interface WebviewState {
 		cols: number;
 		rows: number;
 		ghostty?: unknown;
+		macOptionIsMeta?: boolean;
 		onLinkClick?: (url: string, event: MouseEvent) => boolean;
 	} = {
 		cols: 80,
 		rows: 24,
+		// Enable Option key as Meta on Mac for word navigation (Option+Left/Right)
+		macOptionIsMeta: IS_MAC,
 		// Handle link clicks by posting message to extension (window.open doesn't work in webviews)
 		onLinkClick: (url: string, event: MouseEvent) => {
 			// Only open links when Ctrl/Cmd is held (standard terminal behavior)
