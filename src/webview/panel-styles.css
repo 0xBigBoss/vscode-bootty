@@ -313,6 +313,11 @@ body {
 	animation: bell-pulse 0.5s ease-out;
 }
 
+/* Transient bell indicator (for active terminals) - animates in then out */
+.bell-indicator.bell-transient {
+	animation: bell-transient 1.5s ease-out forwards;
+}
+
 @keyframes bell-pulse {
 	0% {
 		opacity: 0;
@@ -324,6 +329,26 @@ body {
 	100% {
 		opacity: 1;
 		transform: scale(1);
+	}
+}
+
+@keyframes bell-transient {
+	0% {
+		opacity: 0;
+		transform: scale(0.8);
+	}
+	15% {
+		opacity: 1;
+		transform: scale(1.1);
+	}
+	25% {
+		transform: scale(1);
+	}
+	75% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
 	}
 }
 

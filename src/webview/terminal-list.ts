@@ -14,6 +14,7 @@ export interface TerminalListItem {
 	color?: string; // Color from palette
 	groupId?: string; // For split terminals (undefined = standalone)
 	hasBell?: boolean; // Bell indicator active
+	bellTransient?: boolean; // Bell should animate out (for active terminals)
 }
 
 /** Terminal list state */
@@ -234,10 +235,11 @@ export class TerminalList {
 	}
 
 	/** Show or hide bell indicator for a terminal */
-	setBellIndicator(id: TerminalId, show: boolean): void {
+	setBellIndicator(id: TerminalId, show: boolean, transient = false): void {
 		const item = this.state.items.find((i) => i.id === id);
 		if (item) {
 			item.hasBell = show;
+			item.bellTransient = show && transient;
 			this.render();
 		}
 	}
@@ -572,7 +574,7 @@ export class TerminalList {
 		// Bell indicator (shown when terminal has unread bell)
 		if (item.hasBell) {
 			const bellEl = document.createElement("span");
-			bellEl.className = "codicon codicon-bell bell-indicator";
+			bellEl.className = `codicon codicon-bell bell-indicator${item.bellTransient ? " bell-transient" : ""}`;
 			bellEl.title = "Terminal bell";
 			itemEl.appendChild(bellEl);
 		}

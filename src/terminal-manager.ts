@@ -792,32 +792,9 @@ export class TerminalManager implements vscode.Disposable {
 		});
 	}
 
-	private handleTerminalBell(id: TerminalId): void {
-		const instance = this.terminals.get(id);
-		if (!instance) return;
-
-		// Check bell setting
-		const bellStyle = vscode.workspace
-			.getConfiguration("bootty")
-			.get<string>("bell", "visual");
-		if (bellStyle === "none") return;
-
-		// Show brief status bar notification (less intrusive than info message)
-		// This provides audio feedback via VS Code's accessibility settings
-		const statusBarItem = vscode.window.createStatusBarItem(
-			vscode.StatusBarAlignment.Right,
-			1000,
-		);
-		statusBarItem.text = "$(bell) Terminal Bell";
-		statusBarItem.backgroundColor = new vscode.ThemeColor(
-			"statusBarItem.warningBackground",
-		);
-		statusBarItem.show();
-
-		// Auto-hide after 2 seconds
-		setTimeout(() => {
-			statusBarItem.dispose();
-		}, 2000);
+	private handleTerminalBell(_id: TerminalId): void {
+		// Bell indicator is now handled in the webview terminal list
+		// No status bar notification needed - matches VS Code's native behavior
 	}
 
 	private handlePtyExit(id: TerminalId, exitCode: number): void {

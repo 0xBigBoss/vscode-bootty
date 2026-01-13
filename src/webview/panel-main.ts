@@ -620,9 +620,16 @@ interface PanelTerminal {
 		// Handle bell
 		term.onBell(() => {
 			if (runtimeConfig.bellStyle === "none") return;
-			// Show bell indicator in terminal list (only for non-active terminals)
-			if (id !== activeTerminalId) {
-				terminalList.setBellIndicator(id, true);
+			// Show bell indicator in terminal list
+			// Active terminal: transient (animates in/out)
+			// Inactive terminal: persistent (until focused)
+			const isActive = id === activeTerminalId;
+			terminalList.setBellIndicator(id, true, isActive);
+			// For active terminal, auto-hide after animation completes
+			if (isActive) {
+				setTimeout(() => {
+					terminalList.setBellIndicator(id, false);
+				}, 1500); // Matches bell-transient animation duration
 			}
 			vscode.postMessage({ type: "terminal-bell", terminalId: id });
 		});
