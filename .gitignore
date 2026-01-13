@@ -23,3 +23,6 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Claude Code local state
+.claude/*.local.md

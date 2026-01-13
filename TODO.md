@@ -10,6 +10,9 @@
 - [x] Run verification - typecheck passes (iteration 1)
 - [x] Run verification - lint passes (after auto-fix) (iteration 1)
 - [x] Run verification - build succeeds (iteration 1)
+- [x] Remove .claude/ralph-loop.local.md from VCS and add to .gitignore (iteration 2)
+- [x] Remove bell-flash visual behavior from onBell handler (iteration 2)
+- [x] Run verification - all checks pass (iteration 2)
 
 ## In Progress
 - [ ] None
@@ -26,3 +29,5 @@
 - Bell clears when terminal becomes active, focused, or clicked
 - Yellow color uses VS Code theme variables for consistency
 - Pulse animation provides visual feedback when bell appears
+- Removed screen flash behavior - now only shows bell icon in list
+- .claude/*.local.md files are excluded from VCS
