@@ -13,6 +13,7 @@ export interface TerminalListItem {
 	icon?: string; // Codicon name
 	color?: string; // Color from palette
 	groupId?: string; // For split terminals (undefined = standalone)
+	hasBell?: boolean; // Bell indicator active
 }
 
 /** Terminal list state */
@@ -187,6 +188,13 @@ export class TerminalList {
 	/** Set the focused terminal */
 	setFocused(id: TerminalId | null): void {
 		this.state.focusedTerminalId = id;
+		// Clear bell indicator when terminal receives focus
+		if (id) {
+			const item = this.state.items.find((i) => i.id === id);
+			if (item) {
+				item.hasBell = false;
+			}
+		}
 		this.render();
 	}
 
@@ -194,6 +202,11 @@ export class TerminalList {
 	setActive(id: TerminalId | null): void {
 		this.state.activeTerminalId = id;
 		if (id) {
+			// Clear bell indicator when terminal becomes active
+			const item = this.state.items.find((i) => i.id === id);
+			if (item) {
+				item.hasBell = false;
+			}
 			// Also update selection to match active terminal
 			this.state.selectedTerminalIds.clear();
 			this.state.selectedTerminalIds.add(id);
@@ -216,6 +229,15 @@ export class TerminalList {
 		const item = this.state.items.find((i) => i.id === id);
 		if (item) {
 			item.icon = icon;
+			this.render();
+		}
+	}
+
+	/** Show or hide bell indicator for a terminal */
+	setBellIndicator(id: TerminalId, show: boolean): void {
+		const item = this.state.items.find((i) => i.id === id);
+		if (item) {
+			item.hasBell = show;
 			this.render();
 		}
 	}
@@ -482,6 +504,10 @@ export class TerminalList {
 					return;
 				}
 			}
+			// Clear bell indicator when terminal is clicked
+			if (clickedItem) {
+				clickedItem.hasBell = false;
+			}
 			this.state.selectedTerminalIds.clear();
 			this.state.selectedTerminalIds.add(id);
 			this.state.lastSelectedId = id;
@@ -542,6 +568,14 @@ export class TerminalList {
 		titleEl.className = "terminal-title";
 		titleEl.textContent = item.title;
 		itemEl.appendChild(titleEl);
+
+		// Bell indicator (shown when terminal has unread bell)
+		if (item.hasBell) {
+			const bellEl = document.createElement("span");
+			bellEl.className = "codicon codicon-bell bell-indicator";
+			bellEl.title = "Terminal bell";
+			itemEl.appendChild(bellEl);
+		}
 
 		// Hover buttons container
 		const hoverButtons = document.createElement("div");

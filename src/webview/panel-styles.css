@@ -301,6 +301,32 @@ body {
 	text-overflow: ellipsis;
 }
 
+/* Bell indicator */
+.bell-indicator {
+	font-size: 14px;
+	color: var(
+		--vscode-notificationsWarningIcon-foreground,
+		var(--vscode-editorWarning-foreground, #cca700)
+	);
+	margin-left: 4px;
+	flex-shrink: 0;
+	animation: bell-pulse 0.5s ease-out;
+}
+
+@keyframes bell-pulse {
+	0% {
+		opacity: 0;
+		transform: scale(0.8);
+	}
+	50% {
+		transform: scale(1.1);
+	}
+	100% {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
 /* Hover buttons container - always reserve space to prevent height jump */
 .hover-buttons {
 	display: flex;

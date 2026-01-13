@@ -622,6 +622,10 @@ interface PanelTerminal {
 			if (runtimeConfig.bellStyle === "none") return;
 			container.classList.add("bell-flash");
 			setTimeout(() => container.classList.remove("bell-flash"), 150);
+			// Show bell indicator in terminal list (only for non-active terminals)
+			if (id !== activeTerminalId) {
+				terminalList.setBellIndicator(id, true);
+			}
 			vscode.postMessage({ type: "terminal-bell", terminalId: id });
 		});
 
