@@ -1082,13 +1082,17 @@ interface PanelTerminal {
 					};
 					// Preserve scroll position if user has scrolled up (viewportY > 0 means scrolled into history)
 					// viewportY is distance from bottom; when new lines are added, we must adjust by the delta
+					// Defer scroll adjustment to next frame to avoid flicker during rapid writes
 					const scrollOffset = term.getViewportY?.() ?? 0;
 					const scrollbackBefore = term.getScrollbackLength?.() ?? 0;
 					term.write(msg.data);
 					if (scrollOffset > 0 && term.scrollToLine) {
-						const scrollbackAfter = term.getScrollbackLength?.() ?? 0;
-						const delta = scrollbackAfter - scrollbackBefore;
-						term.scrollToLine(scrollOffset + delta);
+						const scrollToLine = term.scrollToLine;
+						requestAnimationFrame(() => {
+							const scrollbackAfter = term.getScrollbackLength?.() ?? 0;
+							const delta = scrollbackAfter - scrollbackBefore;
+							scrollToLine(scrollOffset + delta);
+						});
 					}
 				}
 				break;

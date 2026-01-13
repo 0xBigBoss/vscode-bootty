@@ -398,6 +398,7 @@ interface WebviewState {
 			case "pty-data": {
 				// Preserve scroll position if user has scrolled up (viewportY > 0 means scrolled into history)
 				// viewportY is distance from bottom; when new lines are added, we must adjust by the delta
+				// Defer scroll adjustment to next frame to avoid flicker during rapid writes
 				const termApi = term as unknown as {
 					getViewportY?: () => number;
 					getScrollbackLength?: () => number;
@@ -407,9 +408,12 @@ interface WebviewState {
 				const scrollbackBefore = termApi.getScrollbackLength?.() ?? 0;
 				term.write(msg.data);
 				if (scrollOffset > 0 && termApi.scrollToLine) {
-					const scrollbackAfter = termApi.getScrollbackLength?.() ?? 0;
-					const delta = scrollbackAfter - scrollbackBefore;
-					termApi.scrollToLine(scrollOffset + delta);
+					const scrollToLine = termApi.scrollToLine;
+					requestAnimationFrame(() => {
+						const scrollbackAfter = termApi.getScrollbackLength?.() ?? 0;
+						const delta = scrollbackAfter - scrollbackBefore;
+						scrollToLine(scrollOffset + delta);
+					});
 				}
 				break;
 			}
