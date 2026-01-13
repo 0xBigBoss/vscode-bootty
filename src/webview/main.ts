@@ -522,16 +522,10 @@ interface WebviewState {
 		});
 	});
 
-	// Handle bell notification (visual flash and notify extension for audio/system notification)
+	// Handle bell notification
+	// Editor terminals don't have a terminal list for bell icons, so just notify extension
 	term.onBell(() => {
 		if (runtimeConfig.bellStyle === "none") return;
-		// Visual bell: brief flash of the terminal container
-		const container = document.getElementById("terminal-container");
-		if (container) {
-			container.classList.add("bell-flash");
-			setTimeout(() => container.classList.remove("bell-flash"), 150);
-		}
-		// Notify extension for system-level notification (audio, status bar, etc.)
 		vscode.postMessage({ type: "terminal-bell", terminalId: TERMINAL_ID });
 	});
 

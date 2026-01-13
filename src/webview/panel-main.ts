@@ -618,6 +618,7 @@ interface PanelTerminal {
 		});
 
 		// Handle bell
+		let bellTimer: ReturnType<typeof setTimeout> | null = null;
 		term.onBell(() => {
 			if (runtimeConfig.bellStyle === "none") return;
 			// Show bell indicator in terminal list
@@ -626,8 +627,11 @@ interface PanelTerminal {
 			const isActive = id === activeTerminalId;
 			terminalList.setBellIndicator(id, true, isActive);
 			// For active terminal, auto-hide after animation completes
+			// Clear any existing timer so rapid bells reset the fade delay
+			if (bellTimer) clearTimeout(bellTimer);
 			if (isActive) {
-				setTimeout(() => {
+				bellTimer = setTimeout(() => {
+					bellTimer = null;
 					terminalList.setBellIndicator(id, false);
 				}, 1500); // Matches bell-transient animation duration
 			}

@@ -29,23 +29,6 @@ body {
 	display: block;
 }
 
-/* Bell visual flash effect */
-#terminal-container.bell-flash {
-	animation: bell-flash 150ms ease-out;
-}
-
-@keyframes bell-flash {
-	0% {
-		filter: brightness(1);
-	}
-	50% {
-		filter: brightness(1.3);
-	}
-	100% {
-		filter: brightness(1);
-	}
-}
-
 /* Drag-and-drop visual feedback */
 #terminal-container.drag-over {
 	outline: 2px dashed var(--vscode-focusBorder);
