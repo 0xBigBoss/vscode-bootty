@@ -1,5 +1,7 @@
 # BooTTY
 
+<img src="./images/icon.png" width="200" align="center"/>
+
 An alternative terminal extension for VS Code powered by [Ghostty's](https://ghostty.org/) terminal emulation (libghostty-vt) via WebAssembly.
 
 *Pronounced "Boo-T-T-Y"* 👻
