@@ -76,6 +76,12 @@ interface PanelTerminal {
 	const terminals = new Map<TerminalId, PanelTerminal>();
 	let activeTerminalId: TerminalId | null = null;
 
+	// Scroll preservation state: coalesce multiple writes into single RAF per terminal
+	const scrollRafState = new Map<
+		TerminalId,
+		{ pending: boolean; scrollOffset: number; scrollbackBefore: number }
+	>();
+
 	// Runtime config (updated via update-config message)
 	let runtimeConfig: RuntimeConfig = { bellStyle: "visual" };
 
@@ -1096,15 +1102,36 @@ interface PanelTerminal {
 					// Preserve scroll position if user has scrolled up (viewportY > 0 means scrolled into history)
 					// viewportY is distance from bottom; when new lines are added, we must adjust by the delta
 					// Defer scroll adjustment to next frame to avoid flicker during rapid writes
+					// Coalesce multiple writes: only capture baseline on first write, RAF reads final state
 					const scrollOffset = term.getViewportY?.() ?? 0;
-					const scrollbackBefore = term.getScrollbackLength?.() ?? 0;
+					let rafState = scrollRafState.get(msg.terminalId);
+					// Only capture baseline if not already pending a RAF
+					if ((!rafState || !rafState.pending) && scrollOffset > 0) {
+						rafState = {
+							pending: false,
+							scrollOffset,
+							scrollbackBefore: term.getScrollbackLength?.() ?? 0,
+						};
+						scrollRafState.set(msg.terminalId, rafState);
+					}
 					term.write(msg.data);
-					if (scrollOffset > 0 && term.scrollToLine) {
+					if (
+						scrollOffset > 0 &&
+						term.scrollToLine &&
+						rafState &&
+						!rafState.pending
+					) {
+						rafState.pending = true;
 						const scrollToLine = term.scrollToLine;
+						const termId = msg.terminalId;
 						requestAnimationFrame(() => {
-							const scrollbackAfter = term.getScrollbackLength?.() ?? 0;
-							const delta = scrollbackAfter - scrollbackBefore;
-							scrollToLine(scrollOffset + delta);
+							const state = scrollRafState.get(termId);
+							if (state) {
+								state.pending = false;
+								const scrollbackAfter = term.getScrollbackLength?.() ?? 0;
+								const delta = scrollbackAfter - state.scrollbackBefore;
+								scrollToLine(state.scrollOffset + delta);
+							}
 						});
 					}
 				}

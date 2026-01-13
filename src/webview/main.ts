@@ -392,6 +392,11 @@ interface WebviewState {
 
 	// Register message listener BEFORE posting terminal-ready
 	// This ensures the ready-triggered flush doesn't arrive before handler exists
+	// Scroll preservation state: coalesce multiple writes into single RAF
+	let scrollRafPending = false;
+	let scrollRafScrollOffset = 0;
+	let scrollRafScrollbackBefore = 0;
+
 	window.addEventListener("message", (e) => {
 		const msg = e.data as ExtensionMessage;
 		switch (msg.type) {
@@ -399,20 +404,27 @@ interface WebviewState {
 				// Preserve scroll position if user has scrolled up (viewportY > 0 means scrolled into history)
 				// viewportY is distance from bottom; when new lines are added, we must adjust by the delta
 				// Defer scroll adjustment to next frame to avoid flicker during rapid writes
+				// Coalesce multiple writes: only capture baseline on first write, RAF reads final state
 				const termApi = term as unknown as {
 					getViewportY?: () => number;
 					getScrollbackLength?: () => number;
 					scrollToLine?: (line: number) => void;
 				};
 				const scrollOffset = termApi.getViewportY?.() ?? 0;
-				const scrollbackBefore = termApi.getScrollbackLength?.() ?? 0;
+				// Only capture baseline if not already pending a RAF
+				if (!scrollRafPending && scrollOffset > 0) {
+					scrollRafScrollOffset = scrollOffset;
+					scrollRafScrollbackBefore = termApi.getScrollbackLength?.() ?? 0;
+				}
 				term.write(msg.data);
-				if (scrollOffset > 0 && termApi.scrollToLine) {
+				if (scrollOffset > 0 && termApi.scrollToLine && !scrollRafPending) {
+					scrollRafPending = true;
 					const scrollToLine = termApi.scrollToLine;
 					requestAnimationFrame(() => {
+						scrollRafPending = false;
 						const scrollbackAfter = termApi.getScrollbackLength?.() ?? 0;
-						const delta = scrollbackAfter - scrollbackBefore;
-						scrollToLine(scrollOffset + delta);
+						const delta = scrollbackAfter - scrollRafScrollbackBefore;
+						scrollToLine(scrollRafScrollOffset + delta);
 					});
 				}
 				break;
