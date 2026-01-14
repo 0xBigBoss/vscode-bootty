@@ -5,6 +5,22 @@ All notable changes to the BooTTY extension will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-01-13
+
+### Added
+- VS Code-style bell indicators in terminal list (icon next to terminal name)
+- Transient bell animation for active terminals (fades out after 1.5s)
+- Persistent bell indicator for inactive terminals (clears on focus)
+
+### Fixed
+- Terminal flicker during typing when scrolled up (RAF deferral)
+- Scroll drift during rapid output when scrolled up (RAF coalescing)
+- Bell timer race condition with rapid bells
+
+### Changed
+- Removed screen flash bell animation (replaced with list indicator)
+- Removed status bar bell notification (matches VS Code native behavior)
+
 ## [0.2.0] - 2026-01-09
 
 ### Changed
