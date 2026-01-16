@@ -213,6 +213,32 @@ export function activate(context: vscode.ExtensionContext) {
 				manager?.splitTerminal(activeId);
 			}
 		}),
+
+		// Renderer info (show current renderer status for all terminals)
+		vscode.commands.registerCommand("bootty.rendererInfo", () => {
+			const rendererInfo = manager?.getRendererInfo();
+			if (!rendererInfo || rendererInfo.size === 0) {
+				vscode.window.showInformationMessage(
+					"No terminals are currently open.",
+				);
+				return;
+			}
+
+			const lines: string[] = [];
+			for (const [id, info] of rendererInfo) {
+				let statusStr: string = info.type;
+				if (info.status === "degraded") {
+					statusStr = `${info.type} [DEGRADED: ${info.reason}]`;
+				} else if (info.fallback) {
+					statusStr = `${info.type} (fallback: ${info.reason})`;
+				}
+				lines.push(`Terminal ${id.slice(0, 8)}: ${statusStr}`);
+			}
+
+			vscode.window.showInformationMessage(
+				`BooTTY Renderer Status:\n${lines.join("\n")}`,
+			);
+		}),
 	);
 }
 

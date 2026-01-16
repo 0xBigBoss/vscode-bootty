@@ -1,0 +1,154 @@
+{
+  "terminal": "iTerm.app",
+  "timestamp": "2026-01-09T17:15:56Z",
+  "system": {
+    "os": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M3 Max",
+    "memory_gb": 128,
+    "terminal_rows": 44,
+    "terminal_cols": 138
+  },
+  "results": {
+    "throughput": {
+      "mib_per_sec": 1.01,
+      "duration_ms": 9844,
+      "bytes": 10485760,
+      "runs": 3,
+      "median_duration_ms": 9844,
+      "min_duration_ms": 9705,
+      "max_duration_ms": 12701,
+      "avg_duration_ms": 10750,
+      "variance_pct": 20.0,
+      "all_runs": [
+        {
+          "mib_per_sec": 0.78,
+          "duration_ms": 12701,
+          "bytes": 10485760
+        },
+        {
+          "mib_per_sec": 1.01,
+          "duration_ms": 9844,
+          "bytes": 10485760
+        },
+        {
+          "mib_per_sec": 1.03,
+          "duration_ms": 9705,
+          "bytes": 10485760
+        }
+      ]
+    },
+    "scrollback": {
+      "lines_rendered": 1641375,
+      "duration_ms": 5035,
+      "lines_per_sec": 325993.04,
+      "runs": 3,
+      "median_duration_ms": 5035,
+      "min_duration_ms": 5023,
+      "max_duration_ms": 5035,
+      "avg_duration_ms": 5027,
+      "variance_pct": 0,
+      "all_runs": [
+        {
+          "lines_rendered": 1641375,
+          "duration_ms": 5035,
+          "lines_per_sec": 325993.04
+        },
+        {
+          "lines_rendered": 1749664,
+          "duration_ms": 5023,
+          "lines_per_sec": 348330.47
+        },
+        {
+          "lines_rendered": 1628536,
+          "duration_ms": 5023,
+          "lines_per_sec": 324215.80
+        }
+      ]
+    },
+    "colors": {
+      "duration_ms": 985,
+      "lines": 1000,
+      "colors_per_line": 256,
+      "runs": 3,
+      "median_duration_ms": 985,
+      "min_duration_ms": 968,
+      "max_duration_ms": 993,
+      "avg_duration_ms": 982,
+      "variance_pct": 0,
+      "all_runs": [
+        {
+          "duration_ms": 985,
+          "lines": 1000,
+          "colors_per_line": 256
+        },
+        {
+          "duration_ms": 968,
+          "lines": 1000,
+          "colors_per_line": 256
+        },
+        {
+          "duration_ms": 993,
+          "lines": 1000,
+          "colors_per_line": 256
+        }
+      ]
+    },
+    "unicode": {
+      "duration_ms": 20,
+      "lines": 500,
+      "runs": 3,
+      "median_duration_ms": 20,
+      "min_duration_ms": 19,
+      "max_duration_ms": 22,
+      "avg_duration_ms": 20,
+      "variance_pct": 10.0,
+      "all_runs": [
+        {
+          "duration_ms": 20,
+          "lines": 500
+        },
+        {
+          "duration_ms": 19,
+          "lines": 500
+        },
+        {
+          "duration_ms": 22,
+          "lines": 500
+        }
+      ]
+    },
+    "cursor": {
+      "operations": 1000,
+      "duration_ms": 27,
+      "grid_rows": 44,
+      "grid_cols": 138,
+      "runs": 3,
+      "median_duration_ms": 27,
+      "min_duration_ms": 27,
+      "max_duration_ms": 29,
+      "avg_duration_ms": 27,
+      "variance_pct": 0,
+      "all_runs": [
+        {
+          "operations": 1000,
+          "duration_ms": 29,
+          "grid_rows": 44,
+          "grid_cols": 138
+        },
+        {
+          "operations": 1000,
+          "duration_ms": 27,
+          "grid_rows": 44,
+          "grid_cols": 138
+        },
+        {
+          "operations": 1000,
+          "duration_ms": 27,
+          "grid_rows": 44,
+          "grid_cols": 138
+        }
+      ]
+    }
+  }
+}

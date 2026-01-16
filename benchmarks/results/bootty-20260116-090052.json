@@ -1,0 +1,154 @@
+{
+  "terminal": "bootty",
+  "timestamp": "2026-01-16T15:00:30Z",
+  "system": {
+    "os": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M3 Max",
+    "memory_gb": 128,
+    "terminal_rows": 21,
+    "terminal_cols": 86
+  },
+  "results": {
+    "throughput": {
+      "mib_per_sec": 17.24,
+      "duration_ms": 581,
+      "bytes": 10485760,
+      "runs": 3,
+      "median_duration_ms": 581,
+      "min_duration_ms": 547,
+      "max_duration_ms": 606,
+      "avg_duration_ms": 578,
+      "variance_pct": 10.0,
+      "all_runs": [
+        {
+          "mib_per_sec": 16.66,
+          "duration_ms": 606,
+          "bytes": 10485760
+        },
+        {
+          "mib_per_sec": 17.24,
+          "duration_ms": 581,
+          "bytes": 10485760
+        },
+        {
+          "mib_per_sec": 18.51,
+          "duration_ms": 547,
+          "bytes": 10485760
+        }
+      ]
+    },
+    "scrollback": {
+      "lines_rendered": 499915,
+      "duration_ms": 5043,
+      "lines_per_sec": 99130.47,
+      "runs": 3,
+      "median_duration_ms": 5043,
+      "min_duration_ms": 5033,
+      "max_duration_ms": 5043,
+      "avg_duration_ms": 5036,
+      "variance_pct": 0,
+      "all_runs": [
+        {
+          "lines_rendered": 482146,
+          "duration_ms": 5033,
+          "lines_per_sec": 95796.94
+        },
+        {
+          "lines_rendered": 505866,
+          "duration_ms": 5034,
+          "lines_per_sec": 100489.86
+        },
+        {
+          "lines_rendered": 499915,
+          "duration_ms": 5043,
+          "lines_per_sec": 99130.47
+        }
+      ]
+    },
+    "colors": {
+      "duration_ms": 1371,
+      "lines": 1000,
+      "colors_per_line": 256,
+      "runs": 3,
+      "median_duration_ms": 1371,
+      "min_duration_ms": 1241,
+      "max_duration_ms": 1491,
+      "avg_duration_ms": 1367,
+      "variance_pct": 10.0,
+      "all_runs": [
+        {
+          "duration_ms": 1371,
+          "lines": 1000,
+          "colors_per_line": 256
+        },
+        {
+          "duration_ms": 1491,
+          "lines": 1000,
+          "colors_per_line": 256
+        },
+        {
+          "duration_ms": 1241,
+          "lines": 1000,
+          "colors_per_line": 256
+        }
+      ]
+    },
+    "unicode": {
+      "duration_ms": 18,
+      "lines": 500,
+      "runs": 3,
+      "median_duration_ms": 18,
+      "min_duration_ms": 17,
+      "max_duration_ms": 23,
+      "avg_duration_ms": 19,
+      "variance_pct": 30.0,
+      "all_runs": [
+        {
+          "duration_ms": 23,
+          "lines": 500
+        },
+        {
+          "duration_ms": 17,
+          "lines": 500
+        },
+        {
+          "duration_ms": 18,
+          "lines": 500
+        }
+      ]
+    },
+    "cursor": {
+      "operations": 1000,
+      "duration_ms": 26,
+      "grid_rows": 21,
+      "grid_cols": 86,
+      "runs": 3,
+      "median_duration_ms": 26,
+      "min_duration_ms": 25,
+      "max_duration_ms": 32,
+      "avg_duration_ms": 27,
+      "variance_pct": 20.0,
+      "all_runs": [
+        {
+          "operations": 1000,
+          "duration_ms": 25,
+          "grid_rows": 21,
+          "grid_cols": 86
+        },
+        {
+          "operations": 1000,
+          "duration_ms": 26,
+          "grid_rows": 21,
+          "grid_cols": 86
+        },
+        {
+          "operations": 1000,
+          "duration_ms": 32,
+          "grid_rows": 21,
+          "grid_cols": 86
+        }
+      ]
+    }
+  }
+}

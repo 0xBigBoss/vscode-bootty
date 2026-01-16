@@ -3,6 +3,8 @@
  * Handles tab bar UI and multiple terminal instances within a single webview.
  */
 
+// Import WebGL renderer (bundled by esbuild)
+import { WebGLRenderer } from "@0xbigboss/libghostty-webgl";
 import {
 	createFileCache,
 	extractPathsFromDataTransfer,
@@ -24,12 +26,16 @@ import {
 import type {
 	PanelExtensionMessage,
 	PanelWebviewMessage,
+	RendererMode,
+	RendererStatus,
+	RendererType,
 	RuntimeConfig,
 	TerminalGroup,
 	TerminalTheme,
 } from "../types/messages";
 import type { TerminalId } from "../types/terminal";
 import { ContextMenu } from "./context-menu";
+import { createRenderer } from "./renderer-utils";
 import {
 	createSearchController,
 	type SearchController,
@@ -68,6 +74,8 @@ interface PanelTerminal {
 // Wrap in async IIFE for top-level await
 (async () => {
 	const WASM_URL = document.body.dataset.wasmUrl || "";
+	const RENDERER_MODE = (document.body.dataset.renderer ||
+		"auto") as RendererMode;
 
 	// Restore persisted state
 	const savedState = vscode.getState() as WebviewState | undefined;
@@ -76,6 +84,17 @@ interface PanelTerminal {
 	const terminals = new Map<TerminalId, PanelTerminal>();
 	let activeTerminalId: TerminalId | null = null;
 
+	// Track renderer info per terminal for status reporting
+	const rendererInfo = new Map<
+		TerminalId,
+		{
+			type: RendererType;
+			status: RendererStatus;
+			fallback: boolean;
+			reason?: string;
+		}
+	>();
+
 	// Scroll preservation state: coalesce multiple writes into single RAF per terminal
 	const scrollRafState = new Map<
 		TerminalId,
@@ -83,7 +102,10 @@ interface PanelTerminal {
 	>();
 
 	// Runtime config (updated via update-config message)
-	let runtimeConfig: RuntimeConfig = { bellStyle: "visual" };
+	let runtimeConfig: RuntimeConfig = {
+		bellStyle: "visual",
+		renderer: RENDERER_MODE,
+	};
 
 	// File existence cache
 	const fileCache = createFileCache(5000, 100);
@@ -454,12 +476,53 @@ interface PanelTerminal {
 		wrapper.appendChild(container);
 		terminalsContainer.appendChild(wrapper);
 
+		// Create renderer based on current runtime config (reflects latest setting value)
+		const rendererResult = createRenderer(
+			runtimeConfig.renderer,
+			() =>
+				new WebGLRenderer({
+					onContextLoss: () => {
+						// WebGL context lost after repeated failures - renderer is degraded
+						// Note: The terminal still uses the WebGL renderer (no runtime swap),
+						// but it's no longer rendering. Report accurate status.
+						console.warn(
+							`[bootty] WebGL context lost for terminal ${id} - renderer degraded`,
+						);
+						const existingInfo = rendererInfo.get(id);
+						rendererInfo.set(id, {
+							type: existingInfo?.type ?? "webgl", // Keep actual type
+							status: "degraded",
+							fallback: existingInfo?.fallback ?? false,
+							reason: "WebGL context lost after repeated failures",
+						});
+						vscode.postMessage({
+							type: "renderer-status",
+							terminalId: id,
+							renderer: existingInfo?.type ?? ("webgl" as RendererType),
+							status: "degraded",
+							fallback: existingInfo?.fallback ?? false,
+							reason: "WebGL context lost after repeated failures",
+						});
+					},
+				}),
+		);
+
+		// Track renderer info for this terminal
+		rendererInfo.set(id, {
+			type: rendererResult.type,
+			status: "active",
+			fallback: rendererResult.fallback,
+			reason: rendererResult.reason,
+		});
+
 		// Create terminal (using any for ghostty-web Terminal options)
 		const termOptions: any = {
 			cols: 80,
 			rows: 24,
 			// Enable Option key as Meta on Mac for word navigation (Option+Left/Right)
 			macOptionIsMeta: IS_MAC,
+			// Use custom renderer if available
+			renderer: rendererResult.renderer,
 			onLinkClick: (url: string, event: MouseEvent) => {
 				if (event.ctrlKey || event.metaKey) {
 					// Use pre-compiled pattern for performance
@@ -949,7 +1012,7 @@ interface PanelTerminal {
 					activateTerminal(msg.terminalId);
 					terminalList.setSelected(msg.terminalId);
 				}
-				// Send terminal-ready
+				// Send terminal-ready and renderer-status
 				requestAnimationFrame(() => {
 					requestAnimationFrame(() => {
 						try {
@@ -965,6 +1028,18 @@ interface PanelTerminal {
 								cols: term.cols,
 								rows: term.rows,
 							});
+							// Report renderer status
+							const info = rendererInfo.get(msg.terminalId);
+							if (info) {
+								vscode.postMessage({
+									type: "renderer-status",
+									terminalId: msg.terminalId,
+									renderer: info.type,
+									status: info.status,
+									fallback: info.fallback,
+									reason: info.reason,
+								});
+							}
 						} catch (err) {
 							console.warn("[bootty] Fit error:", err);
 						}

@@ -249,6 +249,11 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			vscode.Uri.file(path.join(codiconsPath, "codicon.css")),
 		);
 
+		// Read renderer mode from settings
+		const renderer = vscode.workspace
+			.getConfiguration("bootty")
+			.get<"auto" | "webgl" | "canvas">("renderer", "auto");
+
 		// Read template and replace placeholders
 		const templatePath = path.join(
 			extensionPath,
@@ -264,7 +269,8 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			.replace(/\{\{ghosttyWebJsUri\}\}/g, ghosttyWebJsUri.toString())
 			.replace(/\{\{mainJsUri\}\}/g, mainJsUri.toString())
 			.replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
-			.replace(/\{\{codiconsUri\}\}/g, codiconsUri.toString());
+			.replace(/\{\{codiconsUri\}\}/g, codiconsUri.toString())
+			.replace(/\{\{renderer\}\}/g, renderer);
 
 		return html;
 	}

@@ -29,6 +29,11 @@ function createWebviewHtml(
 		vscode.Uri.file(path.join(extensionPath, "out", "webview", "styles.css")),
 	);
 
+	// Read renderer mode from settings
+	const renderer = vscode.workspace
+		.getConfiguration("bootty")
+		.get<"auto" | "webgl" | "canvas">("renderer", "auto");
+
 	// Read template and replace all placeholders including terminalId
 	const templatePath = path.join(
 		extensionPath,
@@ -44,7 +49,8 @@ function createWebviewHtml(
 		.replace(/\{\{wasmUri\}\}/g, wasmUri.toString())
 		.replace(/\{\{ghosttyWebJsUri\}\}/g, ghosttyWebJsUri.toString())
 		.replace(/\{\{mainJsUri\}\}/g, mainJsUri.toString())
-		.replace(/\{\{stylesUri\}\}/g, stylesUri.toString());
+		.replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
+		.replace(/\{\{renderer\}\}/g, renderer);
 
 	return html;
 }

@@ -135,11 +135,21 @@ export class TerminalManager implements vscode.Disposable {
 	private terminalOrder: TerminalId[] = []; // Ordered list of terminal IDs
 	private activeTerminalId: TerminalId | null = null; // Currently selected terminal
 	private listWidth = 180; // Persisted list width
+	private rendererInfo = new Map<
+		TerminalId,
+		{
+			type: "webgl" | "canvas";
+			status: "active" | "degraded";
+			fallback: boolean;
+			reason?: string;
+		}
+	>(); // Renderer status per terminal
 	private persistedTerminals: PersistedTerminalState[] = []; // Terminals to restore on hydration
 	private ptyService: PtyService;
 	private context: vscode.ExtensionContext;
 	private panelProvider: BooTTYPanelViewProvider;
 	private usedIndices = new Set<number>(); // Track used indices for reuse
+	private outputChannel: vscode.OutputChannel;
 
 	constructor(
 		context: vscode.ExtensionContext,
@@ -148,6 +158,7 @@ export class TerminalManager implements vscode.Disposable {
 		this.context = context;
 		this.panelProvider = panelProvider;
 		this.ptyService = new PtyService();
+		this.outputChannel = vscode.window.createOutputChannel("BooTTY");
 
 		// Restore persisted state
 		this.loadPersistedState();
@@ -222,12 +233,26 @@ export class TerminalManager implements vscode.Disposable {
 	/** Broadcast updated settings to all ready terminals */
 	private broadcastSettingsUpdate(): void {
 		const settings = getDisplaySettings();
+		const config = this.getRuntimeConfig();
+
+		// Always update the panel webview's runtime config, even if no terminals exist.
+		// This ensures the next terminal created uses the latest renderer setting.
+		this.panelProvider.postMessage({
+			type: "update-config",
+			config,
+		});
+
 		for (const [id, instance] of this.terminals) {
 			if (instance.ready) {
 				this.postToTerminal(id, {
 					type: "update-settings",
 					terminalId: id,
 					settings,
+				});
+				// Also update runtime config (includes renderer mode)
+				this.postToTerminal(id, {
+					type: "update-config",
+					config,
 				});
 			}
 		}
@@ -261,10 +286,13 @@ export class TerminalManager implements vscode.Disposable {
 
 	/** Get runtime config from VS Code settings */
 	private getRuntimeConfig(): RuntimeConfig {
-		const bellStyle = vscode.workspace
-			.getConfiguration("bootty")
-			.get<"visual" | "none">("bell", "visual");
-		return { bellStyle };
+		const config = vscode.workspace.getConfiguration("bootty");
+		const bellStyle = config.get<"visual" | "none">("bell", "visual");
+		const renderer = config.get<"auto" | "webgl" | "canvas">(
+			"renderer",
+			"auto",
+		);
+		return { bellStyle, renderer };
 	}
 
 	createTerminal(config?: Partial<TerminalConfig>): TerminalId | null {
@@ -512,6 +540,15 @@ export class TerminalManager implements vscode.Disposable {
 			case "terminal-bell":
 				this.handleTerminalBell(message.terminalId);
 				break;
+			case "renderer-status":
+				this.handleRendererStatus(
+					message.terminalId,
+					message.renderer,
+					message.status,
+					message.fallback,
+					message.reason,
+				);
+				break;
 		}
 	}
 
@@ -683,6 +720,43 @@ export class TerminalManager implements vscode.Disposable {
 		instance.dataQueue = [];
 	}
 
+	/** Handle renderer status message from webview */
+	private handleRendererStatus(
+		id: TerminalId,
+		type: "webgl" | "canvas",
+		status: "active" | "degraded",
+		fallback: boolean,
+		reason?: string,
+	): void {
+		this.rendererInfo.set(id, { type, status, fallback, reason });
+
+		// Log to output channel
+		if (status === "degraded") {
+			this.outputChannel.appendLine(
+				`[${id}] Renderer DEGRADED (${type}): ${reason ?? "unknown reason"}`,
+			);
+		} else if (fallback) {
+			this.outputChannel.appendLine(
+				`[${id}] Renderer fallback to ${type}: ${reason ?? "unknown reason"}`,
+			);
+		} else {
+			this.outputChannel.appendLine(`[${id}] Renderer: ${type}`);
+		}
+	}
+
+	/** Get renderer info for all terminals (for BooTTY: Renderer Info command) */
+	getRendererInfo(): Map<
+		TerminalId,
+		{
+			type: "webgl" | "canvas";
+			status: "active" | "degraded";
+			fallback: boolean;
+			reason?: string;
+		}
+	> {
+		return new Map(this.rendererInfo);
+	}
+
 	private handleTerminalInput(id: TerminalId, data: string): void {
 		// Forward webview input to PTY
 		this.ptyService.write(id, data);
@@ -833,6 +907,9 @@ export class TerminalManager implements vscode.Disposable {
 		const instance = this.terminals.get(id);
 		if (!instance) return; // Already destroyed
 		this.terminals.delete(id);
+
+		// Clean up renderer info for this terminal
+		this.rendererInfo.delete(id);
 
 		// Release index for reuse
 		this.releaseIndex(instance.index);
@@ -1591,6 +1668,14 @@ export class TerminalManager implements vscode.Disposable {
 			listWidth: this.listWidth,
 		});
 
+		// Send current runtime config BEFORE creating terminals
+		// This ensures new terminals use the latest renderer setting
+		const config = this.getRuntimeConfig();
+		this.panelProvider.postMessage({
+			type: "update-config",
+			config,
+		});
+
 		// Recreate terminals from persisted state (add-tab includes groupId)
 		const savedActiveId = this.activeTerminalId;
 		for (const persisted of this.persistedTerminals) {
@@ -1707,5 +1792,6 @@ export class TerminalManager implements vscode.Disposable {
 		}
 		this.terminals.clear();
 		this.ptyService.dispose();
+		this.outputChannel.dispose();
 	}
 }

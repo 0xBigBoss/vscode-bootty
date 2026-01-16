@@ -1,5 +1,7 @@
 // Type-only imports (stripped at build time)
 
+// Import WebGL renderer (bundled by esbuild)
+import { WebGLRenderer } from "@0xbigboss/libghostty-webgl";
 // Import extracted utilities for testability (bundled by esbuild)
 import {
 	createFileCache,
@@ -19,16 +21,19 @@ import {
 } from "../keybinding-utils";
 import type {
 	ExtensionMessage,
+	RendererMode,
+	RendererStatus,
+	RendererType,
 	RuntimeConfig,
 	TerminalTheme,
 } from "../types/messages";
 import type { TerminalId } from "../types/terminal";
-
 // Import modular components
 import {
 	createFileLinkProvider,
 	FILE_PATH_PATTERN_SINGLE,
 } from "./file-link-provider";
+import { createRenderer } from "./renderer-utils";
 import { createSearchController } from "./search-controller";
 import { createThemeObserver, getVSCodeThemeColors } from "./theme-utils";
 
@@ -54,6 +59,14 @@ interface WebviewState {
 	// Read injected config from body data attributes
 	const TERMINAL_ID = document.body.dataset.terminalId as TerminalId;
 	const WASM_URL = document.body.dataset.wasmUrl || "";
+	const RENDERER_MODE = (document.body.dataset.renderer ||
+		"auto") as RendererMode;
+
+	// Track current renderer info for status reporting
+	let currentRendererType: RendererType = "canvas";
+	let currentRendererStatus: RendererStatus = "active";
+	let rendererFallback = false;
+	let rendererReason: string | undefined;
 
 	// Restore persisted state (survives tab switches due to retainContextWhenHidden,
 	// and partial state survives window moves via VS Code's webview state API)
@@ -80,7 +93,10 @@ interface WebviewState {
 	const BATCH_DEBOUNCE_MS = 50; // Wait 50ms to collect paths before sending batch
 
 	// Runtime config (updated via update-config message)
-	let runtimeConfig: RuntimeConfig = { bellStyle: "visual" };
+	let runtimeConfig: RuntimeConfig = {
+		bellStyle: "visual",
+		renderer: RENDERER_MODE,
+	};
 
 	// File existence cache with TTL (uses extracted utility for testability)
 	const fileCache = createFileCache(5000, 100); // 5s TTL, max 100 entries
@@ -205,17 +221,48 @@ interface WebviewState {
 		});
 	}
 
+	// Create renderer based on mode
+	const rendererResult = createRenderer(
+		RENDERER_MODE,
+		() =>
+			new WebGLRenderer({
+				onContextLoss: () => {
+					// WebGL context lost after repeated failures - renderer is degraded
+					// Note: The terminal still uses the WebGL renderer (no runtime swap),
+					// but it's no longer rendering. Report accurate status.
+					console.warn("[bootty] WebGL context lost - renderer degraded");
+					currentRendererStatus = "degraded";
+					rendererReason = "WebGL context lost after repeated failures";
+					vscode.postMessage({
+						type: "renderer-status",
+						terminalId: TERMINAL_ID,
+						renderer: currentRendererType, // Still "webgl" - no actual swap
+						status: "degraded",
+						fallback: rendererFallback,
+						reason: "WebGL context lost after repeated failures",
+					});
+				},
+			}),
+	);
+
+	currentRendererType = rendererResult.type;
+	rendererFallback = rendererResult.fallback;
+	rendererReason = rendererResult.reason;
+
 	const termOptions: {
 		cols: number;
 		rows: number;
 		ghostty?: unknown;
 		macOptionIsMeta?: boolean;
+		renderer?: unknown;
 		onLinkClick?: (url: string, event: MouseEvent) => boolean;
 	} = {
 		cols: 80,
 		rows: 24,
 		// Enable Option key as Meta on Mac for word navigation (Option+Left/Right)
 		macOptionIsMeta: IS_MAC,
+		// Use custom renderer if available
+		renderer: rendererResult.renderer,
 		// Handle link clicks by posting message to extension (window.open doesn't work in webviews)
 		onLinkClick: (url: string, event: MouseEvent) => {
 			// Only open links when Ctrl/Cmd is held (standard terminal behavior)
@@ -523,6 +570,16 @@ interface WebviewState {
 		terminalId: TERMINAL_ID,
 		cols: term.cols,
 		rows: term.rows,
+	});
+
+	// Report renderer status to extension
+	vscode.postMessage({
+		type: "renderer-status",
+		terminalId: TERMINAL_ID,
+		renderer: currentRendererType,
+		status: currentRendererStatus,
+		fallback: rendererFallback,
+		reason: rendererReason,
 	});
 
 	// Send input to PTY

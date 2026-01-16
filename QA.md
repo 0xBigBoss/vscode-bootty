@@ -185,6 +185,62 @@ echo "test content" > /tmp/testfile.txt
 
 ---
 
+## 9. WebGL2 Renderer
+
+### 9.1 Renderer Mode Settings
+- [ ] Open Settings → search "bootty.renderer"
+- [ ] Setting shows options: `auto`, `webgl`, `canvas`
+- [ ] Default is `auto`
+
+### 9.2 Auto Mode (Default)
+- [ ] With `bootty.renderer` set to `auto`:
+  - [ ] Open a new terminal
+  - [ ] Run `BooTTY: Renderer Info` command (Cmd/Ctrl+Shift+P)
+  - [ ] Should show "webgl" if WebGL2 is available
+  - [ ] If WebGL2 unavailable, should show "canvas (fallback: WebGL2 not available)"
+
+### 9.3 Force WebGL Mode
+- [ ] Set `bootty.renderer` to `webgl`
+- [ ] Open a new terminal
+- [ ] Run `BooTTY: Renderer Info` → shows "webgl"
+- [ ] **Negative test**: On a system without WebGL2, terminal should fail to open with error
+
+### 9.4 Force Canvas Mode
+- [ ] Set `bootty.renderer` to `canvas`
+- [ ] Open a new terminal
+- [ ] Run `BooTTY: Renderer Info` → shows "canvas"
+- [ ] Verify terminal still works correctly with Canvas renderer
+
+### 9.5 Visual Parity (WebGL vs Canvas)
+Compare with `bootty.renderer: webgl` then `bootty.renderer: canvas`:
+- [ ] Text rendering looks identical (same font, size, spacing)
+- [ ] ANSI colors render identically (`ls --color=auto`)
+- [ ] Cursor shape and position matches
+- [ ] Selection highlighting looks the same
+- [ ] Underline/bold/italic text decorations render correctly
+- [ ] Scrollbar appears and behaves identically
+
+### 9.6 Performance (WebGL)
+- [ ] With WebGL enabled, scrolling through large output is smooth
+- [ ] Run `cat /dev/urandom | base64 | head -10000` → no lag or flickering
+- [ ] Resizing terminal during output doesn't cause visual glitches
+
+### 9.7 Context Loss Handling (WebGL)
+- [ ] (Hard to test without GPU stress) If WebGL context is lost after repeated failures:
+  - [ ] Terminal enters degraded state (rendering stops)
+  - [ ] Output Channel "BooTTY" should log `Renderer DEGRADED (webgl): WebGL context lost after repeated failures`
+  - [ ] `BooTTY: Renderer Info` should show "webgl [DEGRADED: WebGL context lost after repeated failures]"
+  - [ ] User should close and reopen terminal to recover (no automatic renderer swap)
+
+### 9.8 Multiple Terminals with Mixed Renderers
+- [ ] Open terminal with `bootty.renderer: webgl`
+- [ ] Change setting to `bootty.renderer: canvas`
+- [ ] Open another terminal
+- [ ] Both terminals should work correctly
+- [ ] `BooTTY: Renderer Info` shows correct renderer for each
+
+---
+
 ## Test Results
 
 | Section | Pass | Fail | Notes |
@@ -197,6 +253,7 @@ echo "test content" > /tmp/testfile.txt
 | 6. URL Links | | | |
 | 7. Multiple Terminals | | | |
 | 8. Error Handling | | | |
+| 9. WebGL2 Renderer | | | |
 
 **Tester**: ________________
 **Date**: ________________

@@ -6,9 +6,19 @@ export interface DisplaySettings {
 	fontSize?: number;
 }
 
+/** Renderer mode setting */
+export type RendererMode = "auto" | "webgl" | "canvas";
+
+/** Actual renderer type in use */
+export type RendererType = "webgl" | "canvas";
+
+/** Renderer status for diagnostics */
+export type RendererStatus = "active" | "degraded";
+
 /** Runtime config for terminal behavior */
 export interface RuntimeConfig {
 	bellStyle: "visual" | "none";
+	renderer: RendererMode;
 }
 
 /** Terminal theme colors */
@@ -135,7 +145,15 @@ export type WebviewMessage =
 			batchId: number;
 			paths: string[];
 	  }
-	| { type: "terminal-bell"; terminalId: TerminalId };
+	| { type: "terminal-bell"; terminalId: TerminalId }
+	| {
+			type: "renderer-status";
+			terminalId: TerminalId;
+			renderer: RendererType;
+			status: RendererStatus;
+			fallback: boolean;
+			reason?: string;
+	  };
 
 /** Panel Webview -> Extension (panel-specific messages) */
 export type PanelWebviewMessage =
