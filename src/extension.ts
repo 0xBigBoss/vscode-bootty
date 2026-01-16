@@ -239,6 +239,39 @@ export function activate(context: vscode.ExtensionContext) {
 				`BooTTY Renderer Status:\n${lines.join("\n")}`,
 			);
 		}),
+
+		// Toggle renderer profiling
+		vscode.commands.registerCommand("bootty.toggleProfiling", () => {
+			manager?.broadcastToAll({ type: "toggle-profiling" });
+			panelProvider?.postMessage({ type: "toggle-profiling" });
+			vscode.window.showInformationMessage(
+				"BooTTY: Renderer profiling toggled. Check webview DevTools console for output.",
+			);
+		}),
+
+		// Open webview DevTools (for debugging)
+		vscode.commands.registerCommand("bootty.openDevTools", () => {
+			vscode.commands.executeCommand(
+				"workbench.action.webview.openDeveloperTools",
+			);
+		}),
+
+		// Toggle debug logging
+		vscode.commands.registerCommand("bootty.toggleDebugLog", async () => {
+			const config = vscode.workspace.getConfiguration("bootty");
+			const current = config.get<string>("debugLog", "");
+			const newValue = current ? "" : "bootty:*";
+			await config.update(
+				"debugLog",
+				newValue,
+				vscode.ConfigurationTarget.Global,
+			);
+			vscode.window.showInformationMessage(
+				newValue
+					? "BooTTY: Debug logging enabled (bootty:*). Reload webviews to capture init logs."
+					: "BooTTY: Debug logging disabled.",
+			);
+		}),
 	);
 }
 

@@ -3,6 +3,16 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { TerminalId } from "./types/terminal";
 
+/** Escape string for safe use in HTML attributes */
+function escapeHtmlAttr(str: string): string {
+	return str
+		.replace(/&/g, "&amp;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;");
+}
+
 function createWebviewHtml(
 	panel: vscode.WebviewPanel,
 	extensionPath: string,
@@ -29,10 +39,10 @@ function createWebviewHtml(
 		vscode.Uri.file(path.join(extensionPath, "out", "webview", "styles.css")),
 	);
 
-	// Read renderer mode from settings
-	const renderer = vscode.workspace
-		.getConfiguration("bootty")
-		.get<"auto" | "webgl" | "canvas">("renderer", "auto");
+	// Read settings
+	const config = vscode.workspace.getConfiguration("bootty");
+	const renderer = config.get<"auto" | "webgl" | "canvas">("renderer", "auto");
+	const debugLog = config.get<string>("debugLog", "");
 
 	// Read template and replace all placeholders including terminalId
 	const templatePath = path.join(
@@ -50,7 +60,8 @@ function createWebviewHtml(
 		.replace(/\{\{ghosttyWebJsUri\}\}/g, ghosttyWebJsUri.toString())
 		.replace(/\{\{mainJsUri\}\}/g, mainJsUri.toString())
 		.replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
-		.replace(/\{\{renderer\}\}/g, renderer);
+		.replace(/\{\{renderer\}\}/g, renderer)
+		.replace(/\{\{debugLog\}\}/g, escapeHtmlAttr(debugLog));
 
 	return html;
 }

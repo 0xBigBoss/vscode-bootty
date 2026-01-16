@@ -292,7 +292,8 @@ export class TerminalManager implements vscode.Disposable {
 			"renderer",
 			"auto",
 		);
-		return { bellStyle, renderer };
+		const debugLog = config.get<string>("debugLog", "");
+		return { bellStyle, renderer, debugLog };
 	}
 
 	createTerminal(config?: Partial<TerminalConfig>): TerminalId | null {
@@ -755,6 +756,15 @@ export class TerminalManager implements vscode.Disposable {
 		}
 	> {
 		return new Map(this.rendererInfo);
+	}
+
+	/** Broadcast a message to all editor terminal webviews */
+	broadcastToAll(message: ExtensionMessage): void {
+		for (const [id, instance] of this.terminals) {
+			if (instance.location === "editor" && instance.ready) {
+				this.postToTerminal(id, message);
+			}
+		}
 	}
 
 	private handleTerminalInput(id: TerminalId, data: string): void {

@@ -33,7 +33,10 @@
 		"onCommand:bootty.newTerminalHere",
 		"onCommand:bootty.nextTab",
 		"onCommand:bootty.previousTab",
-		"onCommand:bootty.rendererInfo"
+		"onCommand:bootty.rendererInfo",
+		"onCommand:bootty.toggleProfiling",
+		"onCommand:bootty.openDevTools",
+		"onCommand:bootty.toggleDebugLog"
 	],
 	"main": "./out/extension.js",
 	"contributes": {
@@ -97,6 +100,18 @@
 			{
 				"command": "bootty.rendererInfo",
 				"title": "BooTTY: Renderer Info"
+			},
+			{
+				"command": "bootty.toggleProfiling",
+				"title": "BooTTY: Toggle Renderer Profiling"
+			},
+			{
+				"command": "bootty.openDevTools",
+				"title": "BooTTY: Open DevTools"
+			},
+			{
+				"command": "bootty.toggleDebugLog",
+				"title": "BooTTY: Toggle Debug Logging"
 			}
 		],
 		"menus": {
@@ -159,6 +174,11 @@
 						"Force Canvas2D (useful for debugging or compatibility)"
 					],
 					"description": "Rendering backend for terminal display. WebGL2 provides better performance for large terminals."
+				},
+				"bootty.debugLog": {
+					"type": "string",
+					"default": "",
+					"description": "Debug log namespaces (comma-separated). Examples: 'bootty:*' for all, 'bootty:webgl:*' for WebGL only, 'bootty:webgl:render,bootty:webgl:cellbuffer' for specific modules. Leave empty to disable. Note: Reload the webview (Developer: Reload Webview) after first enabling to capture early initialization logs."
 				}
 			}
 		},
@@ -268,10 +288,12 @@
 		"@0xbigboss/ghostty-web": "^0.5.0",
 		"@0xbigboss/libghostty-webgl": "file:../packages/libghostty-webgl",
 		"@vscode/codicons": "^0.0.44",
+		"debug": "^4.4.3",
 		"node-pty": "^1.0.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.11",
+		"@types/debug": "^4.1.12",
 		"@types/node": "^22.0.0",
 		"@types/vscode": "^1.106.0",
 		"@typescript/native-preview": "^7.0.0-dev.20260105.1",

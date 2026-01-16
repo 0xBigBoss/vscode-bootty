@@ -19,6 +19,7 @@ export type RendererStatus = "active" | "degraded";
 export interface RuntimeConfig {
 	bellStyle: "visual" | "none";
 	renderer: RendererMode;
+	debugLog: string;
 }
 
 /** Terminal theme colors */
@@ -65,7 +66,8 @@ export type ExtensionMessage =
 			results: Array<{ path: string; exists: boolean }>;
 	  }
 	| { type: "update-config"; config: RuntimeConfig }
-	| { type: "show-search" };
+	| { type: "show-search" }
+	| { type: "toggle-profiling" };
 
 /** Terminal group for split terminals */
 export interface TerminalGroup {

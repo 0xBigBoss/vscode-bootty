@@ -7,6 +7,16 @@ import type {
 } from "./types/messages";
 import type { TerminalId } from "./types/terminal";
 
+/** Escape string for safe use in HTML attributes */
+function escapeHtmlAttr(str: string): string {
+	return str
+		.replace(/&/g, "&amp;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;");
+}
+
 /** Callback for routing messages from panel webview to terminal manager */
 export type PanelMessageHandler = (message: PanelWebviewMessage) => void;
 
@@ -249,10 +259,13 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			vscode.Uri.file(path.join(codiconsPath, "codicon.css")),
 		);
 
-		// Read renderer mode from settings
-		const renderer = vscode.workspace
-			.getConfiguration("bootty")
-			.get<"auto" | "webgl" | "canvas">("renderer", "auto");
+		// Read settings
+		const config = vscode.workspace.getConfiguration("bootty");
+		const renderer = config.get<"auto" | "webgl" | "canvas">(
+			"renderer",
+			"auto",
+		);
+		const debugLog = config.get<string>("debugLog", "");
 
 		// Read template and replace placeholders
 		const templatePath = path.join(
@@ -270,7 +283,8 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			.replace(/\{\{mainJsUri\}\}/g, mainJsUri.toString())
 			.replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
 			.replace(/\{\{codiconsUri\}\}/g, codiconsUri.toString())
-			.replace(/\{\{renderer\}\}/g, renderer);
+			.replace(/\{\{renderer\}\}/g, renderer)
+			.replace(/\{\{debugLog\}\}/g, escapeHtmlAttr(debugLog));
 
 		return html;
 	}

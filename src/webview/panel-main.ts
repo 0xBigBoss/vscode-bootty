@@ -3,8 +3,21 @@
  * Handles tab bar UI and multiple terminal instances within a single webview.
  */
 
+import debug from "debug";
+
+// Enable debug logging early from localStorage (before any debug() calls)
+// This ensures WebGLRenderer constructor/attach logs are captured
+const storedDebug = localStorage.getItem("debug");
+if (storedDebug) {
+	debug.enable(storedDebug);
+}
+
 // Import WebGL renderer (bundled by esbuild)
 import { WebGLRenderer } from "@0xbigboss/libghostty-webgl";
+
+const log = debug("bootty:panel");
+const logWebgl = debug("bootty:panel:webgl");
+
 import {
 	createFileCache,
 	extractPathsFromDataTransfer,
@@ -105,6 +118,7 @@ interface PanelTerminal {
 	let runtimeConfig: RuntimeConfig = {
 		bellStyle: "visual",
 		renderer: RENDERER_MODE,
+		debugLog: "",
 	};
 
 	// File existence cache
@@ -515,6 +529,14 @@ interface PanelTerminal {
 			reason: rendererResult.reason,
 		});
 
+		// Debug: log renderer result
+		logWebgl(
+			"rendererResult: type=%s hasRenderer=%s rendererType=%s",
+			rendererResult.type,
+			!!rendererResult.renderer,
+			rendererResult.renderer?.constructor?.name,
+		);
+
 		// Create terminal (using any for ghostty-web Terminal options)
 		const termOptions: any = {
 			cols: 80,
@@ -551,11 +573,16 @@ interface PanelTerminal {
 		if (ghosttyInstance) {
 			termOptions.ghostty = ghosttyInstance;
 		}
+		logWebgl(
+			"Creating Terminal with options.renderer: %s",
+			termOptions.renderer?.constructor?.name,
+		);
 		const term = new Terminal(termOptions);
 
 		const fitAddon = new FitAddon();
 		term.loadAddon(fitAddon);
 		term.open(container);
+		logWebgl("Terminal opened, checking internal renderer...");
 
 		// Apply theme
 		term.options.theme = getVSCodeThemeColors();
@@ -1321,6 +1348,25 @@ interface PanelTerminal {
 
 			case "update-config": {
 				runtimeConfig = msg.config;
+				// Enable/disable debug logging dynamically
+				// Note: localStorage is also set for persistence across reloads
+				if (msg.config.debugLog) {
+					localStorage.setItem("debug", msg.config.debugLog);
+					debug.enable(msg.config.debugLog);
+				} else {
+					localStorage.removeItem("debug");
+					debug.disable();
+				}
+				break;
+			}
+
+			case "toggle-profiling": {
+				const w = window as Window & { __WEBGL_PROFILE__?: boolean };
+				w.__WEBGL_PROFILE__ = !w.__WEBGL_PROFILE__;
+				log(
+					"Renderer profiling %s",
+					w.__WEBGL_PROFILE__ ? "ENABLED" : "DISABLED",
+				);
 				break;
 			}
 		}

@@ -1,7 +1,19 @@
 // Type-only imports (stripped at build time)
 
+import debug from "debug";
+
+// Enable debug logging early from localStorage (before any debug() calls)
+// This ensures WebGLRenderer constructor/attach logs are captured
+const storedDebug = localStorage.getItem("debug");
+if (storedDebug) {
+	debug.enable(storedDebug);
+}
+
 // Import WebGL renderer (bundled by esbuild)
 import { WebGLRenderer } from "@0xbigboss/libghostty-webgl";
+
+const log = debug("bootty:editor");
+
 // Import extracted utilities for testability (bundled by esbuild)
 import {
 	createFileCache,
@@ -96,6 +108,7 @@ interface WebviewState {
 	let runtimeConfig: RuntimeConfig = {
 		bellStyle: "visual",
 		renderer: RENDERER_MODE,
+		debugLog: "",
 	};
 
 	// File existence cache with TTL (uses extracted utility for testability)
@@ -554,11 +567,30 @@ interface WebviewState {
 
 			case "update-config": {
 				runtimeConfig = msg.config;
+				// Enable/disable debug logging dynamically
+				// Note: localStorage is also set for persistence across reloads
+				if (msg.config.debugLog) {
+					localStorage.setItem("debug", msg.config.debugLog);
+					debug.enable(msg.config.debugLog);
+				} else {
+					localStorage.removeItem("debug");
+					debug.disable();
+				}
 				break;
 			}
 
 			case "show-search": {
 				searchController.show();
+				break;
+			}
+
+			case "toggle-profiling": {
+				const w = window as Window & { __WEBGL_PROFILE__?: boolean };
+				w.__WEBGL_PROFILE__ = !w.__WEBGL_PROFILE__;
+				log(
+					"Renderer profiling %s",
+					w.__WEBGL_PROFILE__ ? "ENABLED" : "DISABLED",
+				);
 				break;
 			}
 		}

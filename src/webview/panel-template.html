@@ -6,7 +6,7 @@
   <link rel="stylesheet" href="{{codiconsUri}}">
   <link rel="stylesheet" href="{{stylesUri}}">
 </head>
-<body data-wasm-url="{{wasmUri}}" data-renderer="{{renderer}}">
+<body data-wasm-url="{{wasmUri}}" data-renderer="{{renderer}}" data-debug-log="{{debugLog}}">
   <!-- Main panel container with terminal area and list -->
   <div id="panel-container">
     <!-- Terminal display area (left) -->
@@ -14,6 +14,17 @@
     <!-- Terminal list (right, resizable) -->
     <div id="terminal-list-container"></div>
   </div>
+  <script>
+    // Set debug logging early, before any modules load
+    (() => {
+      var debugLog = document.body.dataset.debugLog;
+      if (debugLog) {
+        localStorage.setItem('debug', debugLog);
+      } else {
+        localStorage.removeItem('debug');
+      }
+    })();
+  </script>
   <script src="{{ghosttyWebJsUri}}"></script>
   <script src="{{mainJsUri}}"></script>
 </body>
