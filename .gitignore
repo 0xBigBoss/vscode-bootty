@@ -26,3 +26,4 @@ Thumbs.db
 
 # Claude Code local state
 .claude/*.local.md
+bun.lock
