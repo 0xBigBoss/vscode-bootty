@@ -42,6 +42,18 @@ const panelWebviewConfig = {
 	target: "es2022",
 };
 
+// PTY drain worker bundle (browser, classic script)
+const ptyDrainWorkerConfig = {
+	entryPoints: ["src/webview/pty-drain-worker.ts"],
+	bundle: true,
+	outfile: "out/webview/pty-drain-worker.js",
+	platform: "browser",
+	format: "iife",
+	sourcemap: !isProd,
+	minify: isProd,
+	target: "es2022",
+};
+
 async function build() {
 	try {
 		// Build extension
@@ -86,6 +98,26 @@ async function build() {
 		} else {
 			console.log(
 				"[esbuild] Panel webview entry not found, skipping panel webview build.",
+			);
+		}
+
+		// Build PTY drain worker (if entry exists)
+		const workerEntry = path.join(
+			process.cwd(),
+			"src/webview/pty-drain-worker.ts",
+		);
+		if (fs.existsSync(workerEntry)) {
+			if (isWatch) {
+				const workerCtx = await esbuild.context(ptyDrainWorkerConfig);
+				await workerCtx.watch();
+				console.log("[esbuild] Watching PTY drain worker...");
+			} else {
+				await esbuild.build(ptyDrainWorkerConfig);
+				console.log("[esbuild] PTY drain worker built.");
+			}
+		} else {
+			console.log(
+				"[esbuild] PTY drain worker entry not found, skipping worker build.",
 			);
 		}
 

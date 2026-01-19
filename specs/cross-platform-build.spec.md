@@ -19,16 +19,16 @@ Build native node-pty binaries for all major platforms using Docker, enabling Bo
 
 ## Target Platforms
 
-| Platform | Source | Notes |
-|----------|--------|-------|
-| darwin-x64 | npm prebuild | Preserve existing |
-| darwin-arm64 | npm prebuild | Preserve existing |
-| win32-x64 | npm prebuild | Preserve existing |
-| win32-arm64 | npm prebuild | Preserve existing |
-| linux-x64 | Docker build | glibc 2.28 (Debian 10/buster base) |
-| linux-arm64 | Docker build | glibc 2.28 (Debian 10/buster base) |
-| linux-x64-musl | Docker build | Alpine 3.16+ |
-| linux-arm64-musl | Docker build | Alpine 3.16+ |
+| Platform         | Source       | Notes                              |
+| ---------------- | ------------ | ---------------------------------- |
+| darwin-x64       | npm prebuild | Preserve existing                  |
+| darwin-arm64     | npm prebuild | Preserve existing                  |
+| win32-x64        | npm prebuild | Preserve existing                  |
+| win32-arm64      | npm prebuild | Preserve existing                  |
+| linux-x64        | Docker build | glibc 2.28 (Debian 10/buster base) |
+| linux-arm64      | Docker build | glibc 2.28 (Debian 10/buster base) |
+| linux-x64-musl   | Docker build | Alpine 3.16+                       |
+| linux-arm64-musl | Docker build | Alpine 3.16+                       |
 
 ### Platform Requirements
 
@@ -58,11 +58,11 @@ npm run build:native -- --force
 
 ### Docker Images
 
-| Platform | Base Image |
-|----------|------------|
-| linux-x64 | node:20-buster |
-| linux-arm64 | node:20-buster |
-| linux-x64-musl | node:20-alpine |
+| Platform         | Base Image     |
+| ---------------- | -------------- |
+| linux-x64        | node:20-buster |
+| linux-arm64      | node:20-buster |
+| linux-x64-musl   | node:20-alpine |
 | linux-arm64-musl | node:20-alpine |
 
 ### Build Process
@@ -101,10 +101,12 @@ docker run --platform linux/amd64 -v ./prebuilds:/prebuilds node:20-buster \
 `.github/workflows/build-native.yml`
 
 **Triggers**:
+
 - `workflow_dispatch` (manual, for testing)
 - `push` to tags matching `v*` (releases)
 
 **Jobs**:
+
 1. Build all Linux native binaries using the npm script
 2. Upload prebuilds as artifacts
 3. (On release) Include in vsix packaging
@@ -116,12 +118,12 @@ docker run --platform linux/amd64 -v ./prebuilds:/prebuilds node:20-buster \
 
 ## Error Handling
 
-| Condition | Behavior |
-|-----------|----------|
-| Docker not available | Exit with error and installation instructions |
-| Platform build fails | Fail fast, abort all remaining platforms |
-| Smoke test fails | Treat as build failure |
-| Unknown `--platform` value | Exit with error listing valid platforms |
+| Condition                  | Behavior                                      |
+| -------------------------- | --------------------------------------------- |
+| Docker not available       | Exit with error and installation instructions |
+| Platform build fails       | Fail fast, abort all remaining platforms      |
+| Smoke test fails           | Treat as build failure                        |
+| Unknown `--platform` value | Exit with error listing valid platforms       |
 
 ## Success Criteria
 
@@ -136,12 +138,12 @@ docker run --platform linux/amd64 -v ./prebuilds:/prebuilds node:20-buster \
 
 ## File Changes
 
-| File | Change |
-|------|--------|
-| `package.json` | Add `build:native` script |
-| `scripts/build-native.mjs` | New build script |
-| `.github/workflows/build-native.yml` | New CI workflow |
-| `.gitignore` | Ignore `node_modules/node-pty/prebuilds/linux-*` (built artifacts) |
+| File                                 | Change                                                             |
+| ------------------------------------ | ------------------------------------------------------------------ |
+| `package.json`                       | Add `build:native` script                                          |
+| `scripts/build-native.mjs`           | New build script                                                   |
+| `.github/workflows/build-native.yml` | New CI workflow                                                    |
+| `.gitignore`                         | Ignore `node_modules/node-pty/prebuilds/linux-*` (built artifacts) |
 
 ## Future Considerations
 

@@ -8,29 +8,78 @@
 
 ---
 
+## Automation Strategy (80/20)
+
+Headless coverage is the default (≈80%) via Playwright against the web harness.
+Headed coverage (≈20%) validates VS Code integration happy paths using the
+extension host (test-electron).
+
+### Headless (Playwright, web harness)
+
+Run:
+
+```
+npm -C ../packages/ghostty-web run test:playwright:functional
+```
+
+### Headed (Playwright smoke)
+
+Run:
+
+```
+npm -C ../packages/ghostty-web run test:playwright:headed
+```
+
+### VS Code Integration (headed, test-electron)
+
+Run:
+
+```
+npm run test:e2e
+```
+
+---
+
+## Automation Coverage Map
+
+- **Terminal init + render**: Playwright functional + headed smoke
+- **ANSI SGR (color/bold)**: Playwright functional
+- **Scrollback**: Playwright functional
+- **Resize**: Playwright functional
+- **VS Code integration happy path**: `test:e2e` (extension host)
+
+Manual checks below cover OS-specific keybindings, file links, and UX flows.
+
+---
+
 ## 1. Basic Terminal Functionality
 
 ### 1.1 Terminal Creation
+
 - [ ] Run command `BooTTY: New Terminal` from Command Palette (Cmd/Ctrl+Shift+P)
-- [ ] Terminal panel opens in editor area
+- [ ] Terminal panel opens in the configured location (panel by default)
 - [ ] Shell prompt appears within 2 seconds
 
 ### 1.2 Input/Output
+
 - [ ] Type `echo "hello world"` → output appears correctly
 - [ ] Type `ls -la` → directory listing shows with colors
 - [ ] Run `cat` and type multiple lines → input echoes correctly
 - [ ] Press Ctrl+D to exit cat
 
 ### 1.3 Environment
+
 - [ ] Run `echo $TERM_PROGRAM` → shows `bootty`
 - [ ] Run `echo $COLORTERM` → shows `truecolor`
 - [ ] Run `echo $SHELL` → shows your default shell
 
 ### 1.4 Resize
+
 - [ ] Drag panel edges to resize → terminal content reflows
 - [ ] Run `tput cols; tput lines` before and after resize → values change
 
 ### 1.5 Exit
+
 - [ ] Type `exit` → terminal shows exit message
 - [ ] Panel closes after brief delay (~1.5s)
 
@@ -39,6 +88,7 @@
 ## 2. Keybinding Passthrough (#2)
 
 ### 2.1 Mac-specific
+
 - [ ] **Cmd+P** → VS Code Quick Open (not captured by terminal)
 - [ ] **Cmd+Shift+P** → VS Code Command Palette
 - [ ] **Cmd+C** (with selection) → Copies selected text
@@ -50,6 +100,7 @@
 - [ ] **Ctrl+Z** → Suspends process (run `sleep 100`, then Ctrl+Z)
 
 ### 2.2 Windows/Linux-specific
+
 - [ ] **Ctrl+Shift+P** → VS Code Command Palette
 - [ ] **Ctrl+C** (with selection) → Copies selected text
 - [ ] **Ctrl+C** (no selection) → Sends SIGINT
@@ -63,21 +114,25 @@
 ## 3. Custom Fonts (#3)
 
 ### 3.1 Settings
+
 - [ ] Open Settings → search "bootty"
 - [ ] `bootty.fontFamily` and `bootty.fontSize` settings appear
 
 ### 3.2 Font Family
+
 - [ ] Set `bootty.fontFamily` to `"Courier New"` → font changes immediately
 - [ ] Clear setting → falls back to `terminal.integrated.fontFamily`
 - [ ] Clear both → falls back to monospace default
 
 ### 3.3 Font Size
+
 - [ ] Set `bootty.fontSize` to `20` → font size increases
 - [ ] Verify terminal dimensions change (run `tput cols; tput lines`)
 - [ ] Set to `12` → font size decreases
 - [ ] Set to `0` → falls back to `terminal.integrated.fontSize`
 
 ### 3.4 Hot Reload
+
 - [ ] With terminal open, change font size in settings
 - [ ] Terminal updates without restart
 - [ ] New dimensions are sent to PTY (verify with `tput cols; tput lines`)
@@ -87,16 +142,19 @@
 ## 4. Custom Themes (#4)
 
 ### 4.1 Theme Colors
+
 - [ ] Run `ls --color=auto` or colorful command → ANSI colors render
 - [ ] Colors match VS Code's terminal theme
 
 ### 4.2 Theme Switching
+
 - [ ] Open Command Palette → "Preferences: Color Theme"
 - [ ] Switch from dark to light theme
 - [ ] Terminal background/foreground update (new content uses new colors)
 - [ ] **Note**: Existing text keeps original colors (documented limitation)
 
 ### 4.3 Color Customizations
+
 - [ ] Add to settings.json:
   ```json
   "workbench.colorCustomizations": {
@@ -111,7 +169,9 @@
 ## 5. Open File in Editor (#8)
 
 ### 5.1 File Path Detection
+
 Setup: Create a test file first:
+
 ```bash
 echo "test content" > /tmp/testfile.txt
 ```
@@ -121,6 +181,7 @@ echo "test content" > /tmp/testfile.txt
 - [ ] **Cmd/Ctrl+Click** on path → file opens in editor
 
 ### 5.2 Line/Column Navigation
+
 - [ ] Create a multi-line file:
   ```bash
   printf "line1\nline2\nline3\n" > /tmp/lines.txt
@@ -129,23 +190,28 @@ echo "test content" > /tmp/testfile.txt
 - [ ] Cmd/Ctrl+Click → opens file at line 2
 
 ### 5.3 Compiler-style Output
+
 - [ ] Echo TypeScript-style error: `echo "src/index.ts(42,10): error"`
 - [ ] If `src/index.ts` exists, Cmd/Ctrl+Click opens at line 42, col 10
 
 ### 5.4 Relative Paths
+
 - [ ] `cd` to a directory with files
 - [ ] Run `ls *.ts` or similar → relative paths shown
 - [ ] Cmd/Ctrl+Click on relative path → opens correct file
 
 ### 5.5 Non-existent Files
+
 - [ ] Echo a fake path: `echo "/nonexistent/fake.txt"`
 - [ ] Hover → no underline (file doesn't exist, no link created)
 
 ### 5.6 Plain Click (Negative Test)
+
 - [ ] Click on a file path WITHOUT Cmd/Ctrl held
 - [ ] File should NOT open (requires modifier key)
 
 ### 5.7 Windows Paths (if on Windows)
+
 - [ ] Echo Windows path: `echo "C:\Users\test.txt"`
 - [ ] Path detected and clickable (if file exists)
 
@@ -154,11 +220,13 @@ echo "test content" > /tmp/testfile.txt
 ## 6. URL Links
 
 ### 6.1 HTTP/HTTPS Links
+
 - [ ] Echo a URL: `echo "https://github.com"`
 - [ ] Hover → underline appears
 - [ ] Cmd/Ctrl+Click → opens in external browser
 
 ### 6.2 Non-HTTP Schemes
+
 - [ ] `mailto:` links work
 - [ ] `ssh://` links work
 - [ ] Dangerous schemes (file://, vscode://, command://) are blocked
@@ -177,10 +245,12 @@ echo "test content" > /tmp/testfile.txt
 ## 8. Error Handling
 
 ### 8.1 Invalid Shell
+
 - [ ] Set `terminal.integrated.shell.osx` to invalid path
 - [ ] Open terminal → error message shown
 
 ### 8.2 Webview Load Failure
+
 - [ ] (Hard to test) If webview fails to load within 10s, timeout error shown
 
 ---
@@ -188,11 +258,13 @@ echo "test content" > /tmp/testfile.txt
 ## 9. WebGL2 Renderer
 
 ### 9.1 Renderer Mode Settings
+
 - [ ] Open Settings → search "bootty.renderer"
 - [ ] Setting shows options: `auto`, `webgl`, `canvas`
 - [ ] Default is `auto`
 
 ### 9.2 Auto Mode (Default)
+
 - [ ] With `bootty.renderer` set to `auto`:
   - [ ] Open a new terminal
   - [ ] Run `BooTTY: Renderer Info` command (Cmd/Ctrl+Shift+P)
@@ -200,19 +272,23 @@ echo "test content" > /tmp/testfile.txt
   - [ ] If WebGL2 unavailable, should show "canvas (fallback: WebGL2 not available)"
 
 ### 9.3 Force WebGL Mode
+
 - [ ] Set `bootty.renderer` to `webgl`
 - [ ] Open a new terminal
 - [ ] Run `BooTTY: Renderer Info` → shows "webgl"
 - [ ] **Negative test**: On a system without WebGL2, terminal should fail to open with error
 
 ### 9.4 Force Canvas Mode
+
 - [ ] Set `bootty.renderer` to `canvas`
 - [ ] Open a new terminal
 - [ ] Run `BooTTY: Renderer Info` → shows "canvas"
 - [ ] Verify terminal still works correctly with Canvas renderer
 
 ### 9.5 Visual Parity (WebGL vs Canvas)
+
 Compare with `bootty.renderer: webgl` then `bootty.renderer: canvas`:
+
 - [ ] Text rendering looks identical (same font, size, spacing)
 - [ ] ANSI colors render identically (`ls --color=auto`)
 - [ ] Cursor shape and position matches
@@ -221,11 +297,13 @@ Compare with `bootty.renderer: webgl` then `bootty.renderer: canvas`:
 - [ ] Scrollbar appears and behaves identically
 
 ### 9.6 Performance (WebGL)
+
 - [ ] With WebGL enabled, scrolling through large output is smooth
 - [ ] Run `cat /dev/urandom | base64 | head -10000` → no lag or flickering
 - [ ] Resizing terminal during output doesn't cause visual glitches
 
 ### 9.7 Context Loss Handling (WebGL)
+
 - [ ] (Hard to test without GPU stress) If WebGL context is lost after repeated failures:
   - [ ] Terminal enters degraded state (rendering stops)
   - [ ] Output Channel "BooTTY" should log `Renderer DEGRADED (webgl): WebGL context lost after repeated failures`
@@ -233,6 +311,7 @@ Compare with `bootty.renderer: webgl` then `bootty.renderer: canvas`:
   - [ ] User should close and reopen terminal to recover (no automatic renderer swap)
 
 ### 9.8 Multiple Terminals with Mixed Renderers
+
 - [ ] Open terminal with `bootty.renderer: webgl`
 - [ ] Change setting to `bootty.renderer: canvas`
 - [ ] Open another terminal
@@ -243,19 +322,19 @@ Compare with `bootty.renderer: webgl` then `bootty.renderer: canvas`:
 
 ## Test Results
 
-| Section | Pass | Fail | Notes |
-|---------|------|------|-------|
-| 1. Basic Terminal | | | |
-| 2. Keybinding Passthrough | | | |
-| 3. Custom Fonts | | | |
-| 4. Custom Themes | | | |
-| 5. Open File in Editor | | | |
-| 6. URL Links | | | |
-| 7. Multiple Terminals | | | |
-| 8. Error Handling | | | |
-| 9. WebGL2 Renderer | | | |
+| Section                   | Pass | Fail | Notes |
+| ------------------------- | ---- | ---- | ----- |
+| 1. Basic Terminal         |      |      |       |
+| 2. Keybinding Passthrough |      |      |       |
+| 3. Custom Fonts           |      |      |       |
+| 4. Custom Themes          |      |      |       |
+| 5. Open File in Editor    |      |      |       |
+| 6. URL Links              |      |      |       |
+| 7. Multiple Terminals     |      |      |       |
+| 8. Error Handling         |      |      |       |
+| 9. WebGL2 Renderer        |      |      |       |
 
-**Tester**: ________________
-**Date**: ________________
+**Tester**: ******\_\_\_\_******
+**Date**: ******\_\_\_\_******
 **Platform**: macOS / Windows / Linux
-**VS Code Version**: ________________
+**VS Code Version**: ******\_\_\_\_******

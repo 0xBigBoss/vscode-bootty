@@ -8,7 +8,7 @@ export type SpawnResult = { ok: true } | { ok: false; error: string };
 
 /** PTY event handlers */
 export interface PtyHandlers {
-	onData: (data: string) => void;
+	onData: (data: string | Uint8Array) => void;
 	onExit: (code: number) => void;
 	onError: (error: Error) => void; // Runtime errors (e.g., process crash)
 }
@@ -82,6 +82,7 @@ export class PtyService implements vscode.Disposable {
 				rows: config.rows || 24,
 				cwd,
 				env: config.env,
+				encoding: null,
 			});
 
 			// Setup listeners

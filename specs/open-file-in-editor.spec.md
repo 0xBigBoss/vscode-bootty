@@ -1,6 +1,7 @@
 # SPEC: Open File in Editor (Cmd+Click) (#8)
 
 ## Goal
+
 Allow Cmd+Click (Ctrl+Click on Linux/Windows) on file paths in terminal output to open them in VS Code editor, matching VS Code's integrated terminal behavior.
 
 ## Features
@@ -37,13 +38,14 @@ Allow Cmd+Click (Ctrl+Click on Linux/Windows) on file paths in terminal output t
 
 ```typescript
 // Simplified regex for path detection
-const FILE_PATH_REGEX = /(?:^|[\s'"(])(?:\.{0,2}\/)?([a-zA-Z]:)?[\w./-]+(?:\.[a-zA-Z0-9]+)(?:[:(\[][0-9]+[,:]?[0-9]*[\])]?)?/g;
+const FILE_PATH_REGEX =
+  /(?:^|[\s'"(])(?:\.{0,2}\/)?([a-zA-Z]:)?[\w./-]+(?:\.[a-zA-Z0-9]+)(?:[:(\[][0-9]+[,:]?[0-9]*[\])]?)?/g;
 
 // More structured approach:
 interface FileMatch {
-  path: string;      // The file path
-  line?: number;     // Line number (1-indexed)
-  column?: number;   // Column number (1-indexed)
+  path: string; // The file path
+  line?: number; // Line number (1-indexed)
+  column?: number; // Column number (1-indexed)
 }
 ```
 
@@ -60,6 +62,7 @@ Example: `\e]7;file://localhost/Users/allen/project\e\\`
 ### Shell Configuration
 
 **Zsh** (add to `.zshrc`):
+
 ```zsh
 precmd() {
   print -Pn "\e]7;file://${HOST}${PWD}\e\\"
@@ -67,11 +70,13 @@ precmd() {
 ```
 
 **Bash** (add to `.bashrc`):
+
 ```bash
 PROMPT_COMMAND='printf "\e]7;file://%s%s\e\\" "$HOSTNAME" "$PWD"'
 ```
 
 **Fish** (add to `config.fish`):
+
 ```fish
 function __update_cwd --on-variable PWD
   printf '\e]7;file://%s%s\e\\' (hostname) $PWD
@@ -114,7 +119,7 @@ export class FilePathLinkProvider implements ILinkProvider {
   constructor(
     private getCurrentCwd: () => string | undefined,
     private openFile: (path: string, line?: number, col?: number) => void,
-    private fileExists: (path: string) => Promise<boolean>
+    private fileExists: (path: string) => Promise<boolean>,
   ) {}
 
   async provideLinks(y: number, callback: (links: ILink[]) => void): Promise<void> {
@@ -141,12 +146,12 @@ export class FilePathLinkProvider implements ILinkProvider {
   }
 
   private resolvePath(path: string): string {
-    if (path.startsWith('/') || /^[a-zA-Z]:/.test(path)) {
+    if (path.startsWith("/") || /^[a-zA-Z]:/.test(path)) {
       return path; // Already absolute
     }
     const cwd = this.getCurrentCwd();
     if (cwd) {
-      return require('path').resolve(cwd, path);
+      return require("path").resolve(cwd, path);
     }
     return path; // Can't resolve without CWD
   }
@@ -159,20 +164,20 @@ Add to `types/messages.ts`:
 
 ```typescript
 export type WebviewMessage =
-  | { type: 'terminal-input'; terminalId: TerminalId; data: string }
-  | { type: 'terminal-resize'; terminalId: TerminalId; cols: number; rows: number }
-  | { type: 'terminal-ready'; terminalId: TerminalId; cols: number; rows: number }
-  | { type: 'open-url'; terminalId: TerminalId; url: string }
-  | { type: 'open-file'; terminalId: TerminalId; path: string; line?: number; column?: number }
-  | { type: 'check-file-exists'; terminalId: TerminalId; requestId: string; path: string };
+  | { type: "terminal-input"; terminalId: TerminalId; data: string }
+  | { type: "terminal-resize"; terminalId: TerminalId; cols: number; rows: number }
+  | { type: "terminal-ready"; terminalId: TerminalId; cols: number; rows: number }
+  | { type: "open-url"; terminalId: TerminalId; url: string }
+  | { type: "open-file"; terminalId: TerminalId; path: string; line?: number; column?: number }
+  | { type: "check-file-exists"; terminalId: TerminalId; requestId: string; path: string };
 
 export type ExtensionMessage =
-  | { type: 'pty-data'; terminalId: TerminalId; data: string }
-  | { type: 'pty-exit'; terminalId: TerminalId; exitCode: number }
-  | { type: 'resize'; cols: number; rows: number }
-  | { type: 'update-settings'; settings: { fontFamily?: string; fontSize?: number } }
-  | { type: 'update-theme'; theme: ITheme }
-  | { type: 'file-exists-result'; requestId: string; exists: boolean };
+  | { type: "pty-data"; terminalId: TerminalId; data: string }
+  | { type: "pty-exit"; terminalId: TerminalId; exitCode: number }
+  | { type: "resize"; cols: number; rows: number }
+  | { type: "update-settings"; settings: { fontFamily?: string; fontSize?: number } }
+  | { type: "update-theme"; theme: ITheme }
+  | { type: "file-exists-result"; requestId: string; exists: boolean };
 ```
 
 ## Extension Handler

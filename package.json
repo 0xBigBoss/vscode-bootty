@@ -1,44 +1,64 @@
 {
 	"name": "bootty",
 	"displayName": "BooTTY",
-	"description": "Alternative terminal for VS Code powered by Ghostty's terminal emulation (libghostty-vt) via WebAssembly",
 	"version": "0.3.6",
-	"publisher": "bigboss",
-	"license": "MIT",
-	"icon": "images/icon.png",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/0xBigBoss/vscode-bootty.git"
-	},
-	"bugs": {
-		"url": "https://github.com/0xBigBoss/vscode-bootty/issues"
-	},
-	"homepage": "https://github.com/0xBigBoss/vscode-bootty#readme",
-	"engines": {
-		"vscode": "^1.106.0"
-	},
-	"extensionKind": [
-		"workspace"
-	],
+	"description": "Alternative terminal for VS Code powered by Ghostty's terminal emulation (libghostty-vt) via WebAssembly",
 	"categories": [
 		"Other",
 		"Programming Languages"
 	],
-	"activationEvents": [
-		"onView:boottyTerminalPanel",
-		"onCommand:bootty.newTerminal",
-		"onCommand:bootty.newTerminalInEditor",
-		"onCommand:bootty.newTerminalInPanel",
-		"onCommand:bootty.togglePanel",
-		"onCommand:bootty.newTerminalHere",
-		"onCommand:bootty.nextTab",
-		"onCommand:bootty.previousTab",
-		"onCommand:bootty.rendererInfo",
-		"onCommand:bootty.toggleProfiling",
-		"onCommand:bootty.openDevTools",
-		"onCommand:bootty.toggleDebugLog"
-	],
+	"homepage": "https://github.com/0xBigBoss/vscode-bootty#readme",
+	"bugs": {
+		"url": "https://github.com/0xBigBoss/vscode-bootty/issues"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/0xBigBoss/vscode-bootty.git"
+	},
+	"publisher": "bigboss",
 	"main": "./out/extension.js",
+	"scripts": {
+		"vscode:prepublish": "node scripts/check-prebuilds.mjs && npm run build:prod",
+		"compile": "tsgo -p ./",
+		"build": "node esbuild.config.mjs",
+		"build:prod": "NODE_ENV=production node esbuild.config.mjs",
+		"dev": "node esbuild.config.mjs --watch",
+		"watch": "node esbuild.config.mjs --watch",
+		"typecheck": "tsgo --noEmit",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"format": "biome format --write .",
+		"jscpd": "jscpd src --min-lines 10 --min-tokens 50",
+		"knip": "knip",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:e2e": "npm run build && node scripts/run-e2e.mjs",
+		"build:native": "node scripts/build-native.mjs",
+		"bench:e2e": "npm -C ../packages/ghostty-web run build && npm -C ../packages/libghostty-webgl run build && npm run build && node scripts/run-bench-e2e.mjs",
+		"bench:analyze": "node scripts/analyze-profile.mjs",
+		"postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
+	},
+	"dependencies": {
+		"@0xbigboss/ghostty-web": "file:../packages/ghostty-web",
+		"@0xbigboss/libghostty-webgl": "file:../packages/libghostty-webgl",
+		"@vscode/codicons": "^0.0.44",
+		"debug": "^4.4.3",
+		"node-pty": "^1.0.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.11",
+		"@types/debug": "^4.1.12",
+		"@types/node": "^22.0.0",
+		"@types/vscode": "^1.106.0",
+		"@typescript/native-preview": "^7.0.0-dev.20260105.1",
+		"@vscode/test-electron": "^2.5.2",
+		"esbuild": "^0.27.2",
+		"jscpd": "^4.0.5",
+		"knip": "^5.80.0",
+		"lefthook": "^2.0.13",
+		"vitest": "^4.0.16"
+	},
 	"contributes": {
 		"viewsContainers": {
 			"panel": [
@@ -137,6 +157,12 @@
 					"maximum": 72,
 					"description": "Font size in pixels. Set to 0 to use editor.fontSize."
 				},
+				"bootty.scrollback": {
+					"type": "number",
+					"default": 0,
+					"minimum": 0,
+					"description": "Scrollback buffer size in lines. Set to 0 to use terminal.integrated.scrollback."
+				},
 				"bootty.defaultTerminalLocation": {
 					"type": "string",
 					"enum": [
@@ -179,6 +205,94 @@
 					"type": "string",
 					"default": "",
 					"description": "Debug log namespaces (comma-separated). Examples: 'bootty:*' for all, 'bootty:webgl:*' for WebGL only, 'bootty:webgl:render,bootty:webgl:cellbuffer' for specific modules. Leave empty to disable. Note: Reload the webview (Developer: Reload Webview) after first enabling to capture early initialization logs."
+				},
+				"bootty.pty.maxLinesPerFrame": {
+					"type": "number",
+					"default": 0,
+					"minimum": 0,
+					"description": "Maximum number of newline-delimited lines written per animation frame. Set to 0 for auto (rows - 1). Lower values reduce full redraws during heavy output."
+				},
+				"bootty.pty.maxFrameMs": {
+					"type": "number",
+					"default": 0,
+					"minimum": 0,
+					"description": "Optional time budget (ms) for PTY draining per animation frame. Set to 0 to disable. When set, PTY drain stops once the budget is exceeded, even if maxLinesPerFrame allows more."
+				},
+				"bootty.pty.maxBytesPerFrame": {
+					"type": "number",
+					"default": 134217728,
+					"minimum": 0,
+					"description": "Optional byte budget for PTY draining per animation frame. Set to 0 to disable. When set, PTY drain stops once the budget is exceeded, even if maxLinesPerFrame allows more."
+				},
+				"bootty.pty.adaptiveDrain": {
+					"type": "boolean",
+					"default": true,
+					"description": "Enable adaptive PTY draining when the queue backlog grows beyond the configured threshold."
+				},
+				"bootty.pty.adaptiveFrameMs": {
+					"type": "number",
+					"default": 2,
+					"minimum": 0,
+					"description": "Time budget (ms) used for adaptive PTY draining when backlog exceeds the threshold."
+				},
+				"bootty.pty.adaptiveQueueThreshold": {
+					"type": "number",
+					"default": 2,
+					"minimum": 0,
+					"description": "Queue segment count threshold that triggers adaptive PTY draining."
+				},
+				"bootty.pty.adaptiveAutoTune": {
+					"type": "boolean",
+					"default": true,
+					"description": "Dynamically adjust adaptive drain maxLines per frame to meet the frame time budget."
+				},
+				"bootty.pty.adaptiveMinBytesPerFrame": {
+					"type": "number",
+					"default": 134217728,
+					"minimum": 0,
+					"description": "Minimum bytes drained per frame while adaptive draining is active. Set to 0 to disable the minimum."
+				},
+				"bootty.pty.adaptiveQueueBytesThreshold": {
+					"type": "number",
+					"default": 1,
+					"minimum": 0,
+					"description": "Optional queue byte threshold that triggers adaptive PTY draining. Set to 0 to use the segment threshold instead."
+				},
+				"bootty.pty.adaptiveQueueHysteresisRatio": {
+					"type": "number",
+					"default": 0.25,
+					"minimum": 0,
+					"maximum": 1,
+					"description": "When adaptive draining activates, keep it active until the queue falls below threshold * ratio. Set to 0 to disable hysteresis."
+				},
+				"bootty.pty.adaptiveMaxLinesPerFrame": {
+					"type": "number",
+					"default": 0,
+					"minimum": 0,
+					"description": "Override maxLinesPerFrame when adaptive draining is active. Set to 0 to keep the normal maxLinesPerFrame behavior."
+				},
+				"bootty.pty.adaptiveMaxLinesPerFrameWebgl": {
+					"type": "number",
+					"default": 20000,
+					"minimum": 0,
+					"description": "Override adaptiveMaxLinesPerFrame when using the WebGL renderer. Set to 0 to use the normal adaptiveMaxLinesPerFrame."
+				},
+				"bootty.pty.outputBatchMaxBytes": {
+					"type": "number",
+					"default": 16777216,
+					"minimum": 0,
+					"description": "Max PTY output bytes to batch before posting to the webview. Set to 0 to disable size-based batching. Set both outputBatchMaxBytes and outputBatchMaxDelayMs to 0 to disable batching."
+				},
+				"bootty.pty.outputBatchMaxDelayMs": {
+					"type": "number",
+					"default": 4,
+					"minimum": 0,
+					"description": "Max delay (ms) before flushing batched PTY output to the webview. Set to 0 to flush on next tick. Set both outputBatchMaxBytes and outputBatchMaxDelayMs to 0 to disable batching."
+				},
+				"bootty.profile.outputPath": {
+					"type": "string",
+					"default": "",
+					"description": "Optional path for renderer profiling output (JSONL). If set, BooTTY writes to this path in addition to the default log location. Use a directory to auto-name the file. Relative paths resolve from the workspace root."
 				}
 			}
 		},
@@ -266,41 +380,25 @@
 			}
 		]
 	},
-	"scripts": {
-		"vscode:prepublish": "node scripts/check-prebuilds.mjs && npm run build:prod",
-		"compile": "tsgo -p ./",
-		"build": "node esbuild.config.mjs",
-		"build:prod": "NODE_ENV=production node esbuild.config.mjs",
-		"dev": "node esbuild.config.mjs --watch",
-		"watch": "node esbuild.config.mjs --watch",
-		"typecheck": "tsgo --noEmit",
-		"lint": "biome check .",
-		"lint:fix": "biome check --write .",
-		"format": "biome format --write .",
-		"jscpd": "jscpd src --min-lines 10 --min-tokens 50",
-		"knip": "knip",
-		"test": "vitest run",
-		"test:watch": "vitest",
-		"build:native": "node scripts/build-native.mjs",
-		"postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
-	},
-	"dependencies": {
-		"@0xbigboss/ghostty-web": "file:../packages/ghostty-web",
-		"@0xbigboss/libghostty-webgl": "file:../packages/libghostty-webgl",
-		"@vscode/codicons": "^0.0.44",
-		"debug": "^4.4.3",
-		"node-pty": "^1.0.0"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "^2.3.11",
-		"@types/debug": "^4.1.12",
-		"@types/node": "^22.0.0",
-		"@types/vscode": "^1.106.0",
-		"@typescript/native-preview": "^7.0.0-dev.20260105.1",
-		"esbuild": "^0.27.2",
-		"jscpd": "^4.0.5",
-		"knip": "^5.80.0",
-		"lefthook": "^2.0.13",
-		"vitest": "^4.0.16"
+	"activationEvents": [
+		"onCommand:bootty.newTerminal",
+		"onCommand:bootty.newTerminalHere",
+		"onCommand:bootty.newTerminalInEditor",
+		"onCommand:bootty.newTerminalInPanel",
+		"onCommand:bootty.nextTab",
+		"onCommand:bootty.openDevTools",
+		"onCommand:bootty.previousTab",
+		"onCommand:bootty.rendererInfo",
+		"onCommand:bootty.toggleDebugLog",
+		"onCommand:bootty.togglePanel",
+		"onCommand:bootty.toggleProfiling",
+		"onView:boottyTerminalPanel"
+	],
+	"extensionKind": [
+		"workspace"
+	],
+	"icon": "images/icon.png",
+	"engines": {
+		"vscode": "^1.106.0"
 	}
 }

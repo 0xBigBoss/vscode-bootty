@@ -250,6 +250,11 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 				path.join(extensionPath, "out", "webview", "panel-main.js"),
 			),
 		);
+		const ptyWorkerUri = webview.asWebviewUri(
+			vscode.Uri.file(
+				path.join(extensionPath, "out", "webview", "pty-drain-worker.js"),
+			),
+		);
 		const stylesUri = webview.asWebviewUri(
 			vscode.Uri.file(
 				path.join(extensionPath, "out", "webview", "panel-styles.css"),
@@ -266,6 +271,15 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			"auto",
 		);
 		const debugLog = config.get<string>("debugLog", "");
+		const scrollbackSetting = Math.max(0, config.get<number>("scrollback", 0));
+		const integratedScrollback = Math.max(
+			0,
+			vscode.workspace
+				.getConfiguration("terminal.integrated")
+				.get<number>("scrollback", 1000),
+		);
+		const scrollback =
+			scrollbackSetting > 0 ? scrollbackSetting : integratedScrollback;
 
 		// Read template and replace placeholders
 		const templatePath = path.join(
@@ -281,9 +295,11 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			.replace(/\{\{wasmUri\}\}/g, wasmUri.toString())
 			.replace(/\{\{ghosttyWebJsUri\}\}/g, ghosttyWebJsUri.toString())
 			.replace(/\{\{mainJsUri\}\}/g, mainJsUri.toString())
+			.replace(/\{\{ptyWorkerUri\}\}/g, ptyWorkerUri.toString())
 			.replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
 			.replace(/\{\{codiconsUri\}\}/g, codiconsUri.toString())
 			.replace(/\{\{renderer\}\}/g, renderer)
+			.replace(/\{\{scrollback\}\}/g, String(scrollback))
 			.replace(/\{\{debugLog\}\}/g, escapeHtmlAttr(debugLog));
 
 		return html;

@@ -5,6 +5,7 @@ Thank you for your interest in contributing to the BooTTY VS Code extension!
 ## Development Setup
 
 ### Prerequisites
+
 - Node.js 18+
 - npm or pnpm
 - VS Code 1.85+
@@ -12,17 +13,20 @@ Thank you for your interest in contributing to the BooTTY VS Code extension!
 ### Getting Started
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/0xBigBoss/vscode-bootty.git
    cd vscode-bootty
    ```
 
 2. Install dependencies:
+
    ```bash
    npm install
    ```
 
 3. Build the extension:
+
    ```bash
    npm run build
    ```
@@ -53,11 +57,13 @@ vscode-bootty/
 ## Code Style
 
 This project uses:
+
 - **Biome** for linting and formatting
 - **TypeScript** with strict mode
 - **tsgo** for fast type checking
 
 Run checks before committing:
+
 ```bash
 npm run lint        # Check for issues
 npm run lint:fix    # Auto-fix issues
@@ -87,11 +93,13 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture docum
 ## Testing
 
 Run the test suite:
+
 ```bash
 npm test
 ```
 
 For manual testing, use the Extension Development Host (`F5`) and test:
+
 - Terminal creation in panel and editor tabs
 - Keyboard shortcuts
 - File path detection and links
@@ -101,6 +109,7 @@ For manual testing, use the Extension Development Host (`F5`) and test:
 ## Reporting Issues
 
 When reporting bugs, please include:
+
 - VS Code version
 - Extension version
 - Operating system

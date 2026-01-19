@@ -15,7 +15,6 @@ if (storedDebug) {
 // Import WebGL renderer (bundled by esbuild)
 import { WebGLRenderer } from "@0xbigboss/libghostty-webgl";
 
-const log = debug("bootty:panel");
 const logWebgl = debug("bootty:panel:webgl");
 
 import {
@@ -48,6 +47,7 @@ import type {
 } from "../types/messages";
 import type { TerminalId } from "../types/terminal";
 import { ContextMenu } from "./context-menu";
+import { createProfileCollector } from "./profile-collector";
 import { createRenderer } from "./renderer-utils";
 import {
 	createSearchController,
@@ -85,10 +85,22 @@ interface PanelTerminal {
 }
 
 // Wrap in async IIFE for top-level await
-(async () => {
+const boottyPanelInit = async (): Promise<void> => {
 	const WASM_URL = document.body.dataset.wasmUrl || "";
 	const RENDERER_MODE = (document.body.dataset.renderer ||
 		"auto") as RendererMode;
+	const scrollbackValue = Number.parseInt(
+		document.body.dataset.scrollback ?? "",
+		10,
+	);
+	const SCROLLBACK =
+		Number.isFinite(scrollbackValue) && scrollbackValue > 0
+			? scrollbackValue
+			: 1000;
+	const profileCollector = createProfileCollector({
+		source: "panel",
+		postMessage: (message) => vscode.postMessage(message),
+	});
 
 	// Restore persisted state
 	const savedState = vscode.getState() as WebviewState | undefined;
@@ -113,13 +125,617 @@ interface PanelTerminal {
 		TerminalId,
 		{ pending: boolean; scrollOffset: number; scrollbackBefore: number }
 	>();
+	const scrollOffsets = new Map<TerminalId, number>();
+	const scrollDisposables = new Map<TerminalId, { dispose?: () => void }>();
+	const ptyQueueState = new Map<
+		TerminalId,
+		{
+			pending: boolean;
+			bytes: number;
+			segments: number;
+			adaptiveLatch: boolean;
+			drainInFlight: boolean;
+			drainQueued: boolean;
+			pendingChunks: Uint8Array[];
+			pendingBytes: number;
+			pendingSegments: number;
+			mergeScheduled: boolean;
+			mergeChunks: Uint8Array[];
+			mergeBytes: number;
+		}
+	>();
+	const adaptiveMaxLinesByTerminal = new Map<TerminalId, number>();
+	const benchDrainState = new Map<TerminalId, { token: string }>();
+	const directWriteState = new Map<
+		TerminalId,
+		{
+			token: string;
+			payload: string;
+			payloadBytes: number;
+			repeatRemaining: number;
+			repeatTotal: number;
+			finalPayload?: string;
+			finalPayloadBytes: number;
+			writesPerFrame: number;
+			cancelled: boolean;
+		}
+	>();
+	let drainToken = 0;
+	const pendingDrains = new Map<
+		number,
+		{
+			terminalId: TerminalId;
+			adaptiveApplied: boolean;
+			byteAdaptive: boolean;
+			maxLines: number;
+			maxFrameMs: number;
+			maxBytes: number;
+			queueSegmentsBefore: number;
+			queueBytesBefore: number;
+		}
+	>();
+	async function createPtyDrainWorker(uri: string): Promise<Worker> {
+		try {
+			return new Worker(uri);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			try {
+				const response = await fetch(uri);
+				if (!response.ok) {
+					throw new Error(`Fetch failed with status ${response.status}`);
+				}
+				const source = await response.text();
+				const blobUrl = URL.createObjectURL(
+					new Blob([source], { type: "text/javascript" }),
+				);
+				return new Worker(blobUrl);
+			} catch (fetchError) {
+				const fetchMessage =
+					fetchError instanceof Error ? fetchError.message : String(fetchError);
+				throw new Error(
+					`Failed to create PTY drain worker. new Worker error: ${message}. Fetch fallback error: ${fetchMessage}.`,
+				);
+			}
+		}
+	}
+
+	const ptyWorkerUri = document.body.dataset.ptyWorkerUri;
+	if (!ptyWorkerUri) {
+		throw new Error("PTY drain worker URI missing.");
+	}
+	const ptyWorker = await createPtyDrainWorker(ptyWorkerUri);
+	type DrainResultMessage = {
+		type: "drain-result";
+		terminalId: TerminalId;
+		token: number;
+		output: Uint8Array;
+		drainedLines: number;
+		drainedBytes: number;
+		durationMs: number;
+		queueSegmentsBefore: number;
+		queueSegmentsAfter: number;
+		queueBytesBefore: number;
+		queueBytesAfter: number;
+	};
+
+	ptyWorker.addEventListener("message", (event: MessageEvent) => {
+		const msg = event.data as DrainResultMessage;
+		if (msg.type !== "drain-result") return;
+		const pending = pendingDrains.get(msg.token);
+		pendingDrains.delete(msg.token);
+		const state = getPtyQueueState(msg.terminalId);
+		state.drainInFlight = false;
+
+		if (pending) {
+			state.bytes = msg.queueBytesAfter;
+			state.segments = msg.queueSegmentsAfter;
+			if (profileCollector.isActive()) {
+				profileCollector.recordEvent(
+					"bootty:webview:pty-drain",
+					{
+						queueSegmentsBefore: pending.queueSegmentsBefore,
+						queueSegmentsAfter: msg.queueSegmentsAfter,
+						queueBytesBefore: pending.queueBytesBefore,
+						queueBytesAfter: msg.queueBytesAfter,
+						drainedLines: msg.drainedLines,
+						drainedBytes: msg.drainedBytes,
+						durationMs: msg.durationMs,
+						maxLines: pending.maxLines,
+						maxFrameMs: pending.maxFrameMs,
+						maxBytes: pending.maxBytes,
+						adaptiveApplied: pending.adaptiveApplied,
+						autoTuneApplied: runtimeConfig.ptyAdaptiveAutoTune,
+						autoTuneMaxLines:
+							adaptiveMaxLinesByTerminal.get(msg.terminalId) ?? null,
+					},
+					{ terminalId: msg.terminalId },
+				);
+			}
+			if (
+				pending.adaptiveApplied &&
+				!pending.byteAdaptive &&
+				runtimeConfig.ptyAdaptiveAutoTune &&
+				pending.maxFrameMs > 0
+			) {
+				const baseMaxLines = getAdaptiveMaxLinesBase(msg.terminalId);
+				if (baseMaxLines > 0) {
+					const hitMaxLines = msg.drainedLines >= pending.maxLines;
+					const targetMs = pending.maxFrameMs;
+					if (hitMaxLines && msg.durationMs < targetMs * 0.6) {
+						adaptiveMaxLinesByTerminal.set(
+							msg.terminalId,
+							Math.min(
+								baseMaxLines,
+								Math.max(
+									pending.maxLines + 1,
+									Math.ceil(pending.maxLines * 1.5),
+								),
+							),
+						);
+					} else if (msg.durationMs > targetMs * 1.1) {
+						adaptiveMaxLinesByTerminal.set(
+							msg.terminalId,
+							Math.max(1, Math.floor(pending.maxLines * 0.7)),
+						);
+					} else if (!adaptiveMaxLinesByTerminal.has(msg.terminalId)) {
+						adaptiveMaxLinesByTerminal.set(msg.terminalId, pending.maxLines);
+					}
+				}
+			}
+		}
+
+		const output = msg.output;
+		if (output.byteLength > 0) {
+			const terminal = terminals.get(msg.terminalId);
+			if (terminal) {
+				const termApi = terminal.term as unknown as {
+					write: (data: string | Uint8Array) => void;
+					getViewportY?: () => number;
+					getScrollbackLength?: () => number;
+					scrollToLine?: (line: number) => void;
+				};
+				const hasScrollListener = scrollDisposables.has(msg.terminalId);
+				const scrollOffset = hasScrollListener
+					? (scrollOffsets.get(msg.terminalId) ?? 0)
+					: (termApi.getViewportY?.() ?? 0);
+				let rafState = scrollRafState.get(msg.terminalId);
+				if ((!rafState || !rafState.pending) && scrollOffset > 0) {
+					rafState = {
+						pending: false,
+						scrollOffset,
+						scrollbackBefore: termApi.getScrollbackLength?.() ?? 0,
+					};
+					scrollRafState.set(msg.terminalId, rafState);
+				}
+				const writeStart = profileCollector.startSpan();
+				termApi.write(output);
+				profileCollector.recordDuration(
+					"bootty:webview:pty-write",
+					writeStart,
+					{ bytes: output.byteLength },
+					{ terminalId: msg.terminalId },
+				);
+				if (
+					scrollOffset > 0 &&
+					termApi.scrollToLine &&
+					rafState &&
+					!rafState.pending
+				) {
+					rafState.pending = true;
+					const scrollToLine = termApi.scrollToLine;
+					requestAnimationFrame(() => {
+						const state = scrollRafState.get(msg.terminalId);
+						if (state) {
+							state.pending = false;
+							const scrollbackAfter = termApi.getScrollbackLength?.() ?? 0;
+							const delta = scrollbackAfter - state.scrollbackBefore;
+							scrollToLine(state.scrollOffset + delta);
+						}
+					});
+				}
+			}
+		}
+
+		if (state.pendingChunks.length > 0) {
+			for (const chunk of state.pendingChunks) {
+				ptyWorker.postMessage(
+					{ type: "enqueue", terminalId: msg.terminalId, data: chunk },
+					[chunk.buffer],
+				);
+			}
+			state.bytes += state.pendingBytes;
+			state.segments += state.pendingSegments;
+			state.pendingChunks.length = 0;
+			state.pendingBytes = 0;
+			state.pendingSegments = 0;
+		}
+
+		if (state.bytes > 0) {
+			schedulePtyFlush(msg.terminalId);
+		} else if (state.drainQueued) {
+			state.drainQueued = false;
+			schedulePtyFlush(msg.terminalId);
+		}
+	});
+
+	function getAdaptiveMaxLinesBase(terminalId: TerminalId): number {
+		const renderer = rendererInfo.get(terminalId)?.type;
+		if (renderer === "webgl") {
+			const webglAdaptive = runtimeConfig.ptyAdaptiveMaxLinesPerFrameWebgl ?? 0;
+			if (webglAdaptive > 0) return webglAdaptive;
+		}
+		return runtimeConfig.ptyAdaptiveMaxLinesPerFrame ?? 0;
+	}
+
+	function resolvePtyMaxLines(
+		terminalId: TerminalId,
+		term: { rows?: number },
+		adaptiveApplied: boolean,
+		baseMaxLines: number,
+	): number {
+		if (adaptiveApplied) {
+			if (
+				runtimeConfig.ptyAdaptiveAutoTune &&
+				adaptiveMaxLinesByTerminal.has(terminalId)
+			) {
+				return Math.max(1, adaptiveMaxLinesByTerminal.get(terminalId) ?? 1);
+			}
+			if (baseMaxLines > 0) return baseMaxLines;
+		}
+		const configured = runtimeConfig.ptyMaxLinesPerFrame ?? 0;
+		if (configured > 0) return configured;
+		const rows = term.rows ?? 0;
+		return Math.max(1, rows - 1);
+	}
+
+	function resolvePtyMaxFrameMs(
+		state: { adaptiveLatch: boolean },
+		queueSegmentsBefore: number,
+		queueBytesBefore: number,
+	): {
+		maxFrameMs: number;
+		adaptiveApplied: boolean;
+	} {
+		const configured = runtimeConfig.ptyMaxFrameMs ?? 0;
+		if (configured > 0) {
+			return { maxFrameMs: configured, adaptiveApplied: false };
+		}
+		if (!runtimeConfig.ptyAdaptiveDrain) {
+			return { maxFrameMs: 0, adaptiveApplied: false };
+		}
+		const hysteresisRatio = Math.max(
+			0,
+			Math.min(0.99, runtimeConfig.ptyAdaptiveQueueHysteresisRatio ?? 0),
+		);
+		const thresholdBytes = runtimeConfig.ptyAdaptiveQueueBytesThreshold ?? 0;
+		if (thresholdBytes > 0) {
+			if (queueBytesBefore <= 0 && queueSegmentsBefore <= 0) {
+				return { maxFrameMs: 0, adaptiveApplied: false };
+			}
+			return {
+				maxFrameMs: runtimeConfig.ptyAdaptiveFrameMs ?? 0,
+				adaptiveApplied: true,
+			};
+		} else {
+			const threshold = runtimeConfig.ptyAdaptiveQueueThreshold ?? 0;
+			const lower = Math.max(0, Math.floor(threshold * hysteresisRatio));
+			if (state.adaptiveLatch) {
+				if (queueSegmentsBefore <= lower) {
+					state.adaptiveLatch = false;
+				} else {
+					return {
+						maxFrameMs: runtimeConfig.ptyAdaptiveFrameMs ?? 0,
+						adaptiveApplied: true,
+					};
+				}
+			}
+			if (queueSegmentsBefore < threshold) {
+				return { maxFrameMs: 0, adaptiveApplied: false };
+			}
+			state.adaptiveLatch = true;
+		}
+		return {
+			maxFrameMs: runtimeConfig.ptyAdaptiveFrameMs ?? 0,
+			adaptiveApplied: true,
+		};
+	}
+
+	function resolveAdaptiveMinBytes(
+		queueBytesBefore: number,
+		adaptiveApplied: boolean,
+		byteAdaptive: boolean,
+		maxBytes: number,
+	): number {
+		if (!adaptiveApplied || !byteAdaptive) return 0;
+		const thresholdBytes = runtimeConfig.ptyAdaptiveQueueBytesThreshold ?? 0;
+		if (thresholdBytes <= 0) return 0;
+		const minBytes = runtimeConfig.ptyAdaptiveMinBytesPerFrame ?? 0;
+		const queueTarget = Math.min(queueBytesBefore, thresholdBytes);
+		const minTarget = minBytes > 0 ? Math.min(queueBytesBefore, minBytes) : 0;
+		const target = Math.max(queueTarget, minTarget);
+		if (maxBytes > 0) return Math.min(target, maxBytes);
+		return target;
+	}
+
+	function resolvePtyMaxBytesPerFrame(): number {
+		return runtimeConfig.ptyMaxBytesPerFrame ?? 0;
+	}
+
+	function getPtyQueueState(id: TerminalId): {
+		pending: boolean;
+		bytes: number;
+		segments: number;
+		adaptiveLatch: boolean;
+		drainInFlight: boolean;
+		drainQueued: boolean;
+		pendingChunks: Uint8Array[];
+		pendingBytes: number;
+		pendingSegments: number;
+		mergeScheduled: boolean;
+		mergeChunks: Uint8Array[];
+		mergeBytes: number;
+	} {
+		let state = ptyQueueState.get(id);
+		if (!state) {
+			state = {
+				pending: false,
+				bytes: 0,
+				segments: 0,
+				adaptiveLatch: false,
+				drainInFlight: false,
+				drainQueued: false,
+				pendingChunks: [],
+				pendingBytes: 0,
+				pendingSegments: 0,
+				mergeScheduled: false,
+				mergeChunks: [],
+				mergeBytes: 0,
+			};
+			ptyQueueState.set(id, state);
+		}
+		return state;
+	}
+
+	function mergePtyChunks(
+		chunks: Uint8Array[],
+		totalBytes: number,
+	): Uint8Array {
+		if (chunks.length === 1) return chunks[0];
+		const merged = new Uint8Array(totalBytes);
+		let offset = 0;
+		for (const chunk of chunks) {
+			merged.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return merged;
+	}
+
+	function flushMergedPtyData(terminalId: TerminalId): void {
+		const state = ptyQueueState.get(terminalId);
+		if (!state) return;
+		state.mergeScheduled = false;
+		if (state.mergeBytes === 0) {
+			state.mergeChunks.length = 0;
+			return;
+		}
+		const merged = mergePtyChunks(state.mergeChunks, state.mergeBytes);
+		state.mergeChunks.length = 0;
+		state.mergeBytes = 0;
+		if (state.drainInFlight) {
+			state.pendingChunks.push(merged);
+			state.pendingBytes += merged.byteLength;
+			state.pendingSegments += 1;
+		} else {
+			ptyWorker.postMessage({ type: "enqueue", terminalId, data: merged }, [
+				merged.buffer,
+			]);
+			state.bytes += merged.byteLength;
+			state.segments += 1;
+		}
+		schedulePtyFlush(terminalId);
+	}
+
+	function schedulePtyFlush(id: TerminalId): void {
+		const state = getPtyQueueState(id);
+		if (state.pending) return;
+		state.pending = true;
+		requestAnimationFrame(() => {
+			state.pending = false;
+			flushPtyQueue(id);
+		});
+	}
+
+	function startDirectWrite(
+		terminalId: TerminalId,
+		payload: string,
+		repeat: number,
+		finalPayload: string | undefined,
+		writesPerFrame: number,
+		token: string,
+	): void {
+		const terminal = terminals.get(terminalId);
+		if (!terminal) {
+			vscode.postMessage({
+				type: "bench-direct-write-complete",
+				terminalId,
+				token,
+			} satisfies PanelWebviewMessage);
+			return;
+		}
+		const existing = directWriteState.get(terminalId);
+		if (existing) {
+			existing.cancelled = true;
+		}
+		const state = {
+			token,
+			payload,
+			payloadBytes: payload.length,
+			repeatRemaining: Math.max(0, repeat),
+			repeatTotal: Math.max(0, repeat),
+			finalPayload,
+			finalPayloadBytes: finalPayload?.length ?? 0,
+			writesPerFrame: Math.max(0, writesPerFrame),
+			cancelled: false,
+		};
+		directWriteState.set(terminalId, state);
+		profileCollector.recordEvent(
+			"bootty:webview:bench-direct-write",
+			{
+				payloadBytes: payload.length,
+				repeat,
+				finalPayloadBytes: finalPayload?.length ?? 0,
+				writesPerFrame: state.writesPerFrame,
+			},
+			{ terminalId },
+		);
+		requestAnimationFrame(() => runDirectWrite(terminalId));
+	}
+
+	function runDirectWrite(terminalId: TerminalId): void {
+		const state = directWriteState.get(terminalId);
+		if (!state || state.cancelled) return;
+		const terminal = terminals.get(terminalId);
+		if (!terminal) {
+			directWriteState.delete(terminalId);
+			vscode.postMessage({
+				type: "bench-direct-write-complete",
+				terminalId,
+				token: state.token,
+			} satisfies PanelWebviewMessage);
+			return;
+		}
+		const term = terminal.term as unknown as {
+			write: (data: string | Uint8Array) => void;
+		};
+		const unlimited = state.writesPerFrame <= 0;
+		let writes = 0;
+		while (
+			state.repeatRemaining > 0 &&
+			(unlimited || writes < state.writesPerFrame)
+		) {
+			term.write(state.payload);
+			state.repeatRemaining -= 1;
+			writes += 1;
+		}
+		if (state.repeatRemaining === 0 && state.finalPayload) {
+			term.write(state.finalPayload);
+			state.finalPayload = undefined;
+		}
+		if (state.repeatRemaining > 0 || state.finalPayload) {
+			requestAnimationFrame(() => runDirectWrite(terminalId));
+			return;
+		}
+		directWriteState.delete(terminalId);
+		profileCollector.recordEvent(
+			"bootty:webview:bench-direct-write-complete",
+			{
+				totalWrites: state.repeatTotal + (state.finalPayloadBytes > 0 ? 1 : 0),
+				totalBytes:
+					state.repeatTotal * state.payloadBytes + state.finalPayloadBytes,
+			},
+			{ terminalId },
+		);
+		requestAnimationFrame(() => {
+			vscode.postMessage({
+				type: "bench-direct-write-complete",
+				terminalId,
+				token: state.token,
+			} satisfies PanelWebviewMessage);
+		});
+	}
+
+	function scheduleBenchDrain(id: TerminalId, token: string): void {
+		benchDrainState.set(id, { token });
+		const check = () => {
+			const state = getPtyQueueState(id);
+			if (state.bytes === 0 && !state.pending && !state.drainInFlight) {
+				requestAnimationFrame(() => {
+					vscode.postMessage({
+						type: "bench-drain-complete",
+						terminalId: id,
+						token,
+					});
+				});
+				benchDrainState.delete(id);
+				return;
+			}
+			requestAnimationFrame(check);
+		};
+		requestAnimationFrame(check);
+	}
+
+	function flushPtyQueue(id: TerminalId): void {
+		const terminal = terminals.get(id);
+		if (!terminal) return;
+		const state = getPtyQueueState(id);
+		if (state.drainInFlight) {
+			state.drainQueued = true;
+			return;
+		}
+		if (state.segments === 0) return;
+		const term = terminal.term as unknown as { rows?: number };
+		const queueSegmentsBefore = state.segments;
+		const queueBytesBefore = state.bytes;
+		const { maxFrameMs, adaptiveApplied } = resolvePtyMaxFrameMs(
+			state,
+			queueSegmentsBefore,
+			queueBytesBefore,
+		);
+		const byteAdaptive =
+			(runtimeConfig.ptyAdaptiveQueueBytesThreshold ?? 0) > 0;
+		const baseMaxLines = getAdaptiveMaxLinesBase(id);
+		const maxLines = byteAdaptive
+			? 0
+			: resolvePtyMaxLines(id, term, adaptiveApplied, baseMaxLines);
+		const maxBytes = resolvePtyMaxBytesPerFrame();
+		const minBytes = resolveAdaptiveMinBytes(
+			queueBytesBefore,
+			adaptiveApplied,
+			byteAdaptive,
+			maxBytes,
+		);
+		const token = drainToken++;
+		pendingDrains.set(token, {
+			terminalId: id,
+			adaptiveApplied,
+			byteAdaptive,
+			maxLines,
+			maxFrameMs,
+			maxBytes,
+			queueSegmentsBefore,
+			queueBytesBefore,
+		});
+		state.drainInFlight = true;
+		ptyWorker.postMessage({
+			type: "drain",
+			terminalId: id,
+			maxLines,
+			maxFrameMs,
+			maxBytes,
+			minBytes,
+			token,
+		});
+	}
 
 	// Runtime config (updated via update-config message)
 	let runtimeConfig: RuntimeConfig = {
 		bellStyle: "visual",
 		renderer: RENDERER_MODE,
 		debugLog: "",
+		ptyMaxLinesPerFrame: 0,
+		ptyMaxFrameMs: 0,
+		ptyMaxBytesPerFrame: 0,
+		ptyAdaptiveDrain: false,
+		ptyAdaptiveFrameMs: 0,
+		ptyAdaptiveQueueThreshold: 0,
+		ptyAdaptiveMaxLinesPerFrame: 0,
+		ptyAdaptiveMaxLinesPerFrameWebgl: 0,
+		ptyAdaptiveAutoTune: true,
+		ptyAdaptiveMinBytesPerFrame: 0,
+		ptyAdaptiveQueueBytesThreshold: 0,
+		ptyAdaptiveQueueHysteresisRatio: 0,
 	};
+	let runtimeConfigUpdated = false;
 
 	// File existence cache
 	const fileCache = createFileCache(5000, 100);
@@ -528,6 +1144,16 @@ interface PanelTerminal {
 			fallback: rendererResult.fallback,
 			reason: rendererResult.reason,
 		});
+		profileCollector.recordEvent(
+			"bootty:renderer-info",
+			{
+				renderer: rendererResult.type,
+				mode: runtimeConfig.renderer,
+				fallback: rendererResult.fallback,
+				reason: rendererResult.reason ?? null,
+			},
+			{ terminalId: id },
+		);
 
 		// Debug: log renderer result
 		logWebgl(
@@ -541,6 +1167,7 @@ interface PanelTerminal {
 		const termOptions: any = {
 			cols: 80,
 			rows: 24,
+			scrollback: SCROLLBACK,
 			// Enable Option key as Meta on Mac for word navigation (Option+Left/Right)
 			macOptionIsMeta: IS_MAC,
 			// Use custom renderer if available
@@ -583,6 +1210,19 @@ interface PanelTerminal {
 		term.loadAddon(fitAddon);
 		term.open(container);
 		logWebgl("Terminal opened, checking internal renderer...");
+		scrollOffsets.set(id, 0);
+		const scrollDisposable = (
+			term as {
+				onScroll?: (listener: (offset: number) => void) => {
+					dispose?: () => void;
+				};
+			}
+		).onScroll?.((offset) => {
+			scrollOffsets.set(id, offset);
+		});
+		if (scrollDisposable) {
+			scrollDisposables.set(id, scrollDisposable);
+		}
 
 		// Apply theme
 		term.options.theme = getVSCodeThemeColors();
@@ -927,6 +1567,15 @@ interface PanelTerminal {
 			if (!isVisible) {
 				t.container.classList.remove("split-pane");
 			}
+			const termInstance = t.term as {
+				pauseRendering?: () => void;
+				resumeRendering?: () => void;
+			};
+			if (isVisible && !document.hidden) {
+				termInstance.resumeRendering?.();
+			} else {
+				termInstance.pauseRendering?.();
+			}
 		}
 
 		// Fit visible terminals and send resize messages
@@ -961,6 +1610,12 @@ interface PanelTerminal {
 		const terminal = terminals.get(id);
 		if (!terminal) return;
 
+		ptyWorker.postMessage({ type: "reset", terminalId: id });
+
+		// Dispose terminal instance to stop render loop and release resources
+		const termInstance = terminal.term as { dispose?: () => void };
+		termInstance.dispose?.();
+
 		// Clean up observers
 		terminal.themeObserver.disconnect();
 		terminal.resizeObserver.disconnect();
@@ -971,7 +1626,12 @@ interface PanelTerminal {
 		// Remove DOM elements
 		terminal.container.remove();
 
+		scrollDisposables.get(id)?.dispose?.();
+		scrollDisposables.delete(id);
+		scrollOffsets.delete(id);
 		terminals.delete(id);
+		ptyQueueState.delete(id);
+		scrollRafState.delete(id);
 
 		// Activate another terminal if this was active
 		if (activeTerminalId === id) {
@@ -1019,6 +1679,25 @@ interface PanelTerminal {
 		terminalList.setFocused(null);
 	});
 
+	// Pause rendering when the webview is hidden; resume visible terminals when shown.
+	document.addEventListener("visibilitychange", () => {
+		const visibleIds = activeTerminalId
+			? getVisibleTerminalIds(activeTerminalId)
+			: [];
+		for (const [tid, t] of terminals) {
+			const isVisible = visibleIds.includes(tid);
+			const termInstance = t.term as {
+				pauseRendering?: () => void;
+				resumeRendering?: () => void;
+			};
+			if (document.hidden || !isVisible) {
+				termInstance.pauseRendering?.();
+			} else {
+				termInstance.resumeRendering?.();
+			}
+		}
+	});
+
 	// Handle messages from extension
 	window.addEventListener("message", (e) => {
 		const msg = e.data as PanelExtensionMessage;
@@ -1038,6 +1717,12 @@ interface PanelTerminal {
 				if (msg.makeActive) {
 					activateTerminal(msg.terminalId);
 					terminalList.setSelected(msg.terminalId);
+				} else {
+					// Pause rendering for hidden terminals to avoid extra rAF loops
+					const termInstance = terminal.term as {
+						pauseRendering?: () => void;
+					};
+					termInstance.pauseRendering?.();
 				}
 				// Send terminal-ready and renderer-status
 				requestAnimationFrame(() => {
@@ -1195,46 +1880,15 @@ interface PanelTerminal {
 			case "pty-data": {
 				const terminal = terminals.get(msg.terminalId);
 				if (terminal) {
-					const term = terminal.term as unknown as {
-						write: (data: string) => void;
-						getViewportY?: () => number;
-						getScrollbackLength?: () => number;
-						scrollToLine?: (line: number) => void;
-					};
-					// Preserve scroll position if user has scrolled up (viewportY > 0 means scrolled into history)
-					// viewportY is distance from bottom; when new lines are added, we must adjust by the delta
-					// Defer scroll adjustment to next frame to avoid flicker during rapid writes
-					// Coalesce multiple writes: only capture baseline on first write, RAF reads final state
-					const scrollOffset = term.getViewportY?.() ?? 0;
-					let rafState = scrollRafState.get(msg.terminalId);
-					// Only capture baseline if not already pending a RAF
-					if ((!rafState || !rafState.pending) && scrollOffset > 0) {
-						rafState = {
-							pending: false,
-							scrollOffset,
-							scrollbackBefore: term.getScrollbackLength?.() ?? 0,
-						};
-						scrollRafState.set(msg.terminalId, rafState);
-					}
-					term.write(msg.data);
-					if (
-						scrollOffset > 0 &&
-						term.scrollToLine &&
-						rafState &&
-						!rafState.pending
-					) {
-						rafState.pending = true;
-						const scrollToLine = term.scrollToLine;
-						const termId = msg.terminalId;
-						requestAnimationFrame(() => {
-							const state = scrollRafState.get(termId);
-							if (state) {
-								state.pending = false;
-								const scrollbackAfter = term.getScrollbackLength?.() ?? 0;
-								const delta = scrollbackAfter - state.scrollbackBefore;
-								scrollToLine(state.scrollOffset + delta);
-							}
-						});
+					if (msg.data.byteLength > 0) {
+						const state = getPtyQueueState(msg.terminalId);
+						state.mergeChunks.push(msg.data);
+						state.mergeBytes += msg.data.byteLength;
+						if (!state.mergeScheduled) {
+							const terminalId = msg.terminalId;
+							state.mergeScheduled = true;
+							queueMicrotask(() => flushMergedPtyData(terminalId));
+						}
 					}
 				}
 				break;
@@ -1243,13 +1897,31 @@ interface PanelTerminal {
 			case "pty-exit": {
 				const terminal = terminals.get(msg.terminalId);
 				if (terminal) {
+					ptyWorker.postMessage({
+						type: "reset",
+						terminalId: msg.terminalId,
+					});
+					const state = getPtyQueueState(msg.terminalId);
+					state.bytes = 0;
+					state.segments = 0;
+					state.pendingChunks.length = 0;
+					state.pendingBytes = 0;
+					state.pendingSegments = 0;
+					state.mergeChunks.length = 0;
+					state.mergeBytes = 0;
+					state.mergeScheduled = false;
+					state.drainInFlight = false;
+					state.drainQueued = false;
 					const term = terminal.term as unknown as {
-						write: (data: string) => void;
+						write: (data: string | Uint8Array) => void;
 						getViewportY?: () => number;
 						getScrollbackLength?: () => number;
 						scrollToLine?: (line: number) => void;
 					};
-					const scrollOffset = term.getViewportY?.() ?? 0;
+					const hasScrollListener = scrollDisposables.has(msg.terminalId);
+					const scrollOffset = hasScrollListener
+						? (scrollOffsets.get(msg.terminalId) ?? 0)
+						: (term.getViewportY?.() ?? 0);
 					const scrollbackBefore = term.getScrollbackLength?.() ?? 0;
 					term.write(
 						`\r\n\x1b[90m[Process exited with code ${msg.exitCode}]\x1b[0m\r\n`,
@@ -1348,6 +2020,11 @@ interface PanelTerminal {
 
 			case "update-config": {
 				runtimeConfig = msg.config;
+				adaptiveMaxLinesByTerminal.clear();
+				for (const state of ptyQueueState.values()) {
+					state.adaptiveLatch = false;
+				}
+				runtimeConfigUpdated = true;
 				// Enable/disable debug logging dynamically
 				// Note: localStorage is also set for persistence across reloads
 				if (msg.config.debugLog) {
@@ -1357,18 +2034,65 @@ interface PanelTerminal {
 					localStorage.removeItem("debug");
 					debug.disable();
 				}
+				if (msg.token) {
+					vscode.postMessage({ type: "config-applied", token: msg.token });
+				}
 				break;
 			}
-
-			case "toggle-profiling": {
-				const w = window as Window & { __WEBGL_PROFILE__?: boolean };
-				w.__WEBGL_PROFILE__ = !w.__WEBGL_PROFILE__;
-				log(
-					"Renderer profiling %s",
-					w.__WEBGL_PROFILE__ ? "ENABLED" : "DISABLED",
+			case "bench-drain-request":
+				scheduleBenchDrain(msg.terminalId, msg.token);
+				break;
+			case "bench-direct-write":
+				startDirectWrite(
+					msg.terminalId,
+					msg.payload,
+					msg.repeat,
+					msg.finalPayload,
+					msg.writesPerFrame ?? 0,
+					msg.token,
 				);
 				break;
-			}
+
+			case "profile-start":
+				profileCollector.start(msg.sessionId);
+				profileCollector.recordEvent("bootty:webview:runtime-config", {
+					bellStyle: runtimeConfig.bellStyle,
+					renderer: runtimeConfig.renderer,
+					ptyMaxLinesPerFrame: runtimeConfig.ptyMaxLinesPerFrame,
+					ptyMaxFrameMs: runtimeConfig.ptyMaxFrameMs,
+					ptyMaxBytesPerFrame: runtimeConfig.ptyMaxBytesPerFrame,
+					ptyAdaptiveDrain: runtimeConfig.ptyAdaptiveDrain,
+					ptyAdaptiveFrameMs: runtimeConfig.ptyAdaptiveFrameMs,
+					ptyAdaptiveQueueThreshold: runtimeConfig.ptyAdaptiveQueueThreshold,
+					ptyAdaptiveMaxLinesPerFrame:
+						runtimeConfig.ptyAdaptiveMaxLinesPerFrame,
+					ptyAdaptiveMaxLinesPerFrameWebgl:
+						runtimeConfig.ptyAdaptiveMaxLinesPerFrameWebgl,
+					ptyAdaptiveAutoTune: runtimeConfig.ptyAdaptiveAutoTune,
+					ptyAdaptiveMinBytesPerFrame:
+						runtimeConfig.ptyAdaptiveMinBytesPerFrame,
+					ptyAdaptiveQueueBytesThreshold:
+						runtimeConfig.ptyAdaptiveQueueBytesThreshold,
+					ptyAdaptiveQueueHysteresisRatio:
+						runtimeConfig.ptyAdaptiveQueueHysteresisRatio,
+					configUpdated: runtimeConfigUpdated,
+				});
+				for (const [terminalId, info] of rendererInfo.entries()) {
+					profileCollector.recordEvent(
+						"bootty:renderer-info",
+						{
+							renderer: info.type,
+							mode: runtimeConfig.renderer,
+							fallback: info.fallback,
+							reason: info.reason ?? null,
+						},
+						{ terminalId },
+					);
+				}
+				break;
+			case "profile-stop":
+				profileCollector.stop(msg.sessionId);
+				break;
 		}
 	});
 
@@ -1431,4 +2155,16 @@ interface PanelTerminal {
 
 	// Periodic state save
 	setInterval(saveState, 30000);
-})();
+};
+
+boottyPanelInit().catch((error) => {
+	const message = error instanceof Error ? error.message : String(error);
+	const stack = error instanceof Error ? error.stack : undefined;
+	console.error("BooTTY panel webview init error", error);
+	vscode.postMessage({
+		type: "webview-error",
+		scope: "panel",
+		message,
+		stack,
+	});
+});

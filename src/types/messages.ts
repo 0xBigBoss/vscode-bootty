@@ -15,11 +15,34 @@ export type RendererType = "webgl" | "canvas";
 /** Renderer status for diagnostics */
 export type RendererStatus = "active" | "degraded";
 
+export type ProfileSource = "panel" | "editor";
+
+export interface ProfileEvent {
+	name: string;
+	ts: number;
+	dur?: number;
+	data?: Record<string, string | number | boolean | null>;
+	source: ProfileSource;
+	terminalId?: TerminalId;
+}
+
 /** Runtime config for terminal behavior */
 export interface RuntimeConfig {
 	bellStyle: "visual" | "none";
 	renderer: RendererMode;
 	debugLog: string;
+	ptyMaxLinesPerFrame: number;
+	ptyMaxFrameMs: number;
+	ptyMaxBytesPerFrame: number;
+	ptyAdaptiveDrain: boolean;
+	ptyAdaptiveFrameMs: number;
+	ptyAdaptiveQueueThreshold: number;
+	ptyAdaptiveMaxLinesPerFrame: number;
+	ptyAdaptiveMaxLinesPerFrameWebgl: number;
+	ptyAdaptiveAutoTune: boolean;
+	ptyAdaptiveMinBytesPerFrame: number;
+	ptyAdaptiveQueueBytesThreshold: number;
+	ptyAdaptiveQueueHysteresisRatio: number;
 }
 
 /** Terminal theme colors */
@@ -50,7 +73,7 @@ export interface TerminalTheme {
 
 /** Extension -> Webview (editor terminals) */
 export type ExtensionMessage =
-	| { type: "pty-data"; terminalId: TerminalId; data: string }
+	| { type: "pty-data"; terminalId: TerminalId; data: Uint8Array }
 	| { type: "pty-exit"; terminalId: TerminalId; exitCode: number }
 	| { type: "resize"; terminalId: TerminalId; cols: number; rows: number }
 	| {
@@ -65,9 +88,20 @@ export type ExtensionMessage =
 			batchId: number;
 			results: Array<{ path: string; exists: boolean }>;
 	  }
-	| { type: "update-config"; config: RuntimeConfig }
+	| { type: "update-config"; config: RuntimeConfig; token?: string }
 	| { type: "show-search" }
-	| { type: "toggle-profiling" };
+	| { type: "profile-start"; sessionId: string }
+	| { type: "profile-stop"; sessionId: string }
+	| { type: "bench-drain-request"; terminalId: TerminalId; token: string }
+	| {
+			type: "bench-direct-write";
+			terminalId: TerminalId;
+			token: string;
+			payload: string;
+			repeat: number;
+			finalPayload?: string;
+			writesPerFrame?: number;
+	  };
 
 /** Terminal group for split terminals */
 export interface TerminalGroup {
@@ -155,6 +189,22 @@ export type WebviewMessage =
 			status: RendererStatus;
 			fallback: boolean;
 			reason?: string;
+	  }
+	| { type: "config-applied"; token: string }
+	| { type: "bench-drain-complete"; terminalId: TerminalId; token: string }
+	| {
+			type: "bench-direct-write-complete";
+			terminalId: TerminalId;
+			token: string;
+	  }
+	| { type: "profile-data"; sessionId: string; events: ProfileEvent[] }
+	| { type: "profile-error"; sessionId: string; error: string }
+	| {
+			type: "webview-error";
+			scope: "editor" | "panel";
+			message: string;
+			terminalId?: TerminalId;
+			stack?: string;
 	  };
 
 /** Panel Webview -> Extension (panel-specific messages) */

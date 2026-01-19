@@ -1,24 +1,34 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{cspSource}} 'unsafe-inline' 'wasm-unsafe-eval'; style-src {{cspSource}} 'unsafe-inline'; img-src {{cspSource}} data:; font-src {{cspSource}}; connect-src {{cspSource}};">
-  <link rel="stylesheet" href="{{stylesUri}}">
-</head>
-<body data-terminal-id="{{terminalId}}" data-wasm-url="{{wasmUri}}" data-renderer="{{renderer}}" data-debug-log="{{debugLog}}">
-  <div id="terminal-container"></div>
-  <script>
-    // Set debug logging early, before any modules load
-    (() => {
-      var debugLog = document.body.dataset.debugLog;
-      if (debugLog) {
-        localStorage.setItem('debug', debugLog);
-      } else {
-        localStorage.removeItem('debug');
-      }
-    })();
-  </script>
-  <script src="{{ghosttyWebJsUri}}"></script>
-  <script src="{{mainJsUri}}"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src {{cspSource}} 'unsafe-inline' 'wasm-unsafe-eval'; worker-src {{cspSource}} blob:; child-src {{cspSource}} blob:; style-src {{cspSource}} 'unsafe-inline'; img-src {{cspSource}} data:; font-src {{cspSource}}; connect-src {{cspSource}};"
+    />
+    <link rel="stylesheet" href="{{stylesUri}}" />
+  </head>
+  <body
+    data-terminal-id="{{terminalId}}"
+    data-wasm-url="{{wasmUri}}"
+    data-renderer="{{renderer}}"
+    data-debug-log="{{debugLog}}"
+    data-pty-worker-uri="{{ptyWorkerUri}}"
+    data-scrollback="{{scrollback}}"
+  >
+    <div id="terminal-container"></div>
+    <script>
+      // Set debug logging early, before any modules load
+      (() => {
+        var debugLog = document.body.dataset.debugLog;
+        if (debugLog) {
+          localStorage.setItem("debug", debugLog);
+        } else {
+          localStorage.removeItem("debug");
+        }
+      })();
+    </script>
+    <script src="{{ghosttyWebJsUri}}"></script>
+    <script src="{{mainJsUri}}"></script>
+  </body>
 </html>

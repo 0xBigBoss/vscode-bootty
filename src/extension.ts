@@ -241,11 +241,28 @@ export function activate(context: vscode.ExtensionContext) {
 		}),
 
 		// Toggle renderer profiling
-		vscode.commands.registerCommand("bootty.toggleProfiling", () => {
-			manager?.broadcastToAll({ type: "toggle-profiling" });
-			panelProvider?.postMessage({ type: "toggle-profiling" });
+		vscode.commands.registerCommand("bootty.toggleProfiling", async () => {
+			if (!manager) return;
+			const status = await manager.toggleProfiling();
+			if (!status) {
+				vscode.window.showErrorMessage(
+					"BooTTY: Unable to toggle profiling (start/stop failed).",
+				);
+				return;
+			}
+			const outputLabel = status.outputPaths?.join(", ");
+			if (status.active) {
+				vscode.window.showInformationMessage(
+					outputLabel
+						? `BooTTY: Profiling started (JSONL). Writing to: ${outputLabel}`
+						: "BooTTY: Profiling started (JSONL).",
+				);
+				return;
+			}
 			vscode.window.showInformationMessage(
-				"BooTTY: Renderer profiling toggled. Check webview DevTools console for output.",
+				outputLabel
+					? `BooTTY: Profiling stopped. Saved to: ${outputLabel}`
+					: "BooTTY: Profiling stopped.",
 			);
 		}),
 
@@ -272,6 +289,17 @@ export function activate(context: vscode.ExtensionContext) {
 					: "BooTTY: Debug logging disabled.",
 			);
 		}),
+
+		// Internal: run benchmark scenarios (used by e2e harness)
+		vscode.commands.registerCommand(
+			"bootty.runBenchmark",
+			async (options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				return await manager.runBenchmark(options);
+			},
+		),
 	);
 }
 

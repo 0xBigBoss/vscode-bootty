@@ -1,6 +1,7 @@
 # SPEC: Custom Fonts (#3)
 
 ## Goal
+
 Allow users to configure terminal font family and size, with sensible defaults that respect existing VS Code terminal settings.
 
 ## Settings Priority
@@ -14,6 +15,7 @@ Allow users to configure terminal font family and size, with sensible defaults t
 ### Package Contribution
 
 Add to `package.json`:
+
 ```json
 {
   "contributes": {
@@ -53,16 +55,16 @@ export interface BooTTYDisplaySettings {
 ```typescript
 // settings.ts
 export function resolveDisplaySettings(): BooTTYDisplaySettings {
-  const boottyConfig = vscode.workspace.getConfiguration('bootty');
-  const terminalConfig = vscode.workspace.getConfiguration('terminal.integrated');
+  const boottyConfig = vscode.workspace.getConfiguration("bootty");
+  const terminalConfig = vscode.workspace.getConfiguration("terminal.integrated");
 
-  const fontFamily = boottyConfig.get<string>('fontFamily') ||
-                     terminalConfig.get<string>('fontFamily') ||
-                     'monospace';
+  const fontFamily =
+    boottyConfig.get<string>("fontFamily") ||
+    terminalConfig.get<string>("fontFamily") ||
+    "monospace";
 
-  const fontSize = boottyConfig.get<number>('fontSize') ||
-                   terminalConfig.get<number>('fontSize') ||
-                   15;
+  const fontSize =
+    boottyConfig.get<number>("fontSize") || terminalConfig.get<number>("fontSize") || 15;
 
   return { fontFamily, fontSize };
 }
@@ -71,17 +73,19 @@ export function resolveDisplaySettings(): BooTTYDisplaySettings {
 ### Message Protocol
 
 Add to `types/messages.ts`:
+
 ```typescript
 export type ExtensionMessage =
-  | { type: 'pty-data'; terminalId: TerminalId; data: string }
-  | { type: 'pty-exit'; terminalId: TerminalId; exitCode: number }
-  | { type: 'resize'; cols: number; rows: number }
-  | { type: 'update-settings'; settings: { fontFamily?: string; fontSize?: number } };
+  | { type: "pty-data"; terminalId: TerminalId; data: string }
+  | { type: "pty-exit"; terminalId: TerminalId; exitCode: number }
+  | { type: "resize"; cols: number; rows: number }
+  | { type: "update-settings"; settings: { fontFamily?: string; fontSize?: number } };
 ```
 
 ### Webview Handler
 
 In `webview/main.ts`:
+
 ```typescript
 case 'update-settings':
   if (msg.settings.fontFamily !== undefined) {
@@ -98,6 +102,7 @@ case 'update-settings':
 ### Hot Reload
 
 In `terminal-manager.ts`:
+
 ```typescript
 constructor(context: vscode.ExtensionContext) {
   // ... existing code ...
@@ -133,6 +138,7 @@ private broadcastSettingsUpdate(): void {
 ### Initial Settings Injection
 
 Pass settings when creating terminal:
+
 ```typescript
 const settings = resolveDisplaySettings();
 const termOptions = {

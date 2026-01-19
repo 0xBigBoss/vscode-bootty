@@ -37,3 +37,56 @@ export function resolveConfig(
 export const MAX_DATA_QUEUE_SIZE = 1000; // Max buffered chunks
 export const READY_TIMEOUT_MS = 10000; // 10s timeout for terminal-ready
 export const EXIT_CLOSE_DELAY_MS = 1500; // Delay before closing panel after PTY exit
+
+type BenchmarkMode = "pty" | "direct" | "command";
+
+type BenchmarkScenario =
+	| "ptySmall"
+	| "ptyStress"
+	| "directSmall"
+	| "directStress"
+	| "ptySuite";
+
+interface BenchmarkScenarioConfig {
+	mode: BenchmarkMode;
+	lineCount: number;
+	label: string;
+	directLinesPerWrite?: number;
+	directWritesPerFrame?: number;
+	commandRelative?: string;
+	outputPrefix?: string;
+}
+
+export const BENCHMARK_SCENARIOS: Record<
+	BenchmarkScenario,
+	BenchmarkScenarioConfig
+> = {
+	ptySmall: { mode: "pty", lineCount: 320, label: "bench-small" },
+	ptyStress: { mode: "pty", lineCount: 2400, label: "bench-stress" },
+	directSmall: {
+		mode: "direct",
+		lineCount: 320,
+		label: "bench-direct-small",
+		directLinesPerWrite: 80,
+		directWritesPerFrame: 50,
+	},
+	directStress: {
+		mode: "direct",
+		lineCount: 2400,
+		label: "bench-direct-stress",
+		directLinesPerWrite: 100,
+		directWritesPerFrame: 50,
+	},
+	ptySuite: {
+		mode: "command",
+		lineCount: 0,
+		label: "bench-suite",
+		commandRelative: "benchmarks/run.sh",
+		outputPrefix: "Results saved to:",
+	},
+};
+
+export const BENCHMARK_READY_TIMEOUT_MS = 15000;
+export const BENCHMARK_SENTINEL_TIMEOUT_MS = 60000;
+export const BENCHMARK_COOLDOWN_MS = 300;
+export const BENCHMARK_CONFIG_APPLY_DELAY_MS = 100;

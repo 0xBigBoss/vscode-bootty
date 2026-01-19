@@ -1,6 +1,12 @@
 {
 	"$schema": "https://unpkg.com/knip@5/schema.json",
-	"entry": ["src/webview/main.ts", "src/webview/panel-main.ts"],
+	"entry": [
+		"src/webview/main.ts",
+		"src/webview/panel-main.ts",
+		"src/webview/pty-drain-worker.ts",
+		"test/bench/runner.js",
+		"test/e2e/runner.js"
+	],
 	"ignore": ["src/webview/main.ts", "src/webview/panel-main.ts"],
 	"ignoreDependencies": [
 		"@0xbigboss/ghostty-web",

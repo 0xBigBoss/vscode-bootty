@@ -35,6 +35,11 @@ function createWebviewHtml(
 	const mainJsUri = panel.webview.asWebviewUri(
 		vscode.Uri.file(path.join(extensionPath, "out", "webview", "main.js")),
 	);
+	const ptyWorkerUri = panel.webview.asWebviewUri(
+		vscode.Uri.file(
+			path.join(extensionPath, "out", "webview", "pty-drain-worker.js"),
+		),
+	);
 	const stylesUri = panel.webview.asWebviewUri(
 		vscode.Uri.file(path.join(extensionPath, "out", "webview", "styles.css")),
 	);
@@ -43,6 +48,15 @@ function createWebviewHtml(
 	const config = vscode.workspace.getConfiguration("bootty");
 	const renderer = config.get<"auto" | "webgl" | "canvas">("renderer", "auto");
 	const debugLog = config.get<string>("debugLog", "");
+	const scrollbackSetting = Math.max(0, config.get<number>("scrollback", 0));
+	const integratedScrollback = Math.max(
+		0,
+		vscode.workspace
+			.getConfiguration("terminal.integrated")
+			.get<number>("scrollback", 1000),
+	);
+	const scrollback =
+		scrollbackSetting > 0 ? scrollbackSetting : integratedScrollback;
 
 	// Read template and replace all placeholders including terminalId
 	const templatePath = path.join(
@@ -59,8 +73,10 @@ function createWebviewHtml(
 		.replace(/\{\{wasmUri\}\}/g, wasmUri.toString())
 		.replace(/\{\{ghosttyWebJsUri\}\}/g, ghosttyWebJsUri.toString())
 		.replace(/\{\{mainJsUri\}\}/g, mainJsUri.toString())
+		.replace(/\{\{ptyWorkerUri\}\}/g, ptyWorkerUri.toString())
 		.replace(/\{\{stylesUri\}\}/g, stylesUri.toString())
 		.replace(/\{\{renderer\}\}/g, renderer)
+		.replace(/\{\{scrollback\}\}/g, String(scrollback))
 		.replace(/\{\{debugLog\}\}/g, escapeHtmlAttr(debugLog));
 
 	return html;

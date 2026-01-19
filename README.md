@@ -4,7 +4,7 @@
 
 An alternative terminal extension for VS Code powered by [Ghostty's](https://ghostty.org/) terminal emulation (libghostty-vt) via WebAssembly.
 
-*Pronounced "Boo-T-T-Y"* 👻
+_Pronounced "Boo-T-T-Y"_ 👻
 
 > **Note**: This is an unofficial community project. It is not affiliated with or endorsed by the Ghostty project.
 
@@ -46,13 +46,13 @@ code --install-extension bigboss.bootty
 
 ## Usage
 
-| Action | Windows/Linux | macOS |
-|--------|---------------|-------|
-| Toggle terminal panel | <kbd>Ctrl</kbd>+<kbd>`</kbd> | <kbd>Cmd</kbd>+<kbd>`</kbd> |
-| New terminal | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> |
+| Action                | Windows/Linux                                 | macOS                                        |
+| --------------------- | --------------------------------------------- | -------------------------------------------- |
+| Toggle terminal panel | <kbd>Ctrl</kbd>+<kbd>`</kbd>                  | <kbd>Cmd</kbd>+<kbd>`</kbd>                  |
+| New terminal          | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> |
 | New terminal in panel | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
-| Next tab | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>]</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>]</kbd> |
-| Previous tab | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> |
+| Next tab              | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>]</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>]</kbd> |
+| Previous tab          | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> |
 
 You can also use the Command Palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>):
 
@@ -63,13 +63,13 @@ You can also use the Command Palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</k
 
 ## Configuration
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `bootty.fontFamily` | `""` | Font family (empty = use editor font) |
-| `bootty.fontSize` | `0` | Font size in pixels (0 = use editor size) |
-| `bootty.defaultTerminalLocation` | `"panel"` | Where new terminals open (`"panel"` or `"editor"`) |
-| `bootty.bell` | `"visual"` | Bell style (`"visual"` or `"none"`) |
-| `bootty.notifications` | `true` | Show notifications from terminal apps (OSC 9) |
+| Setting                          | Default    | Description                                        |
+| -------------------------------- | ---------- | -------------------------------------------------- |
+| `bootty.fontFamily`              | `""`       | Font family (empty = use editor font)              |
+| `bootty.fontSize`                | `0`        | Font size in pixels (0 = use editor size)          |
+| `bootty.defaultTerminalLocation` | `"panel"`  | Where new terminals open (`"panel"` or `"editor"`) |
+| `bootty.bell`                    | `"visual"` | Bell style (`"visual"` or `"none"`)                |
+| `bootty.notifications`           | `true`     | Show notifications from terminal apps (OSC 9)      |
 
 ## Requirements
 

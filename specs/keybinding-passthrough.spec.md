@@ -1,6 +1,7 @@
 # SPEC: Keybinding Passthrough (#2)
 
 ## Goal
+
 Allow VS Code keybindings (Cmd+P, Cmd+Shift+P, Ctrl+`, etc.) to work while BooTTY terminal is focused, matching VS Code's integrated terminal behavior.
 
 ## Current Problem
@@ -10,6 +11,7 @@ The ghostty-web library's InputHandler captures all keyboard events with `preven
 ## Behavior Model: Match Integrated Terminal
 
 VS Code's integrated terminal:
+
 - **Passes through** most Cmd/Ctrl combos to VS Code (quick open, command palette, etc.)
 - **Captures** terminal-specific inputs (Ctrl+C for interrupt, raw typing, etc.)
 
@@ -20,6 +22,7 @@ We'll implement the same model.
 ### Key Filter Logic
 
 Keys that should go to **terminal**:
+
 - All non-modifier keys (typing)
 - `Ctrl+C` (interrupt signal 0x03)
 - `Ctrl+D` (EOF)
@@ -30,6 +33,7 @@ Keys that should go to **terminal**:
 - Arrow keys, function keys, etc.
 
 Keys that should **pass through** to VS Code:
+
 - `Cmd+P` / `Ctrl+P` (Quick Open)
 - `Cmd+Shift+P` / `Ctrl+Shift+P` (Command Palette)
 - `Cmd+Shift+E` / `Ctrl+Shift+E` (Explorer)
@@ -60,7 +64,7 @@ Use `attachCustomKeyEventHandler` with three-way return semantics:
 
 // webview/main.ts
 term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+  const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
   const cmdOrCtrl = isMac ? event.metaKey : event.ctrlKey;
 
   // Terminal-specific bindings (capture these)
@@ -75,12 +79,12 @@ term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
   // Cmd/Ctrl combos should pass through to VS Code
   if (cmdOrCtrl) {
     // Exception: Cmd+C with selection should copy (handled by SelectionManager)
-    if (event.key === 'c' && !event.shiftKey && term.hasSelection()) {
+    if (event.key === "c" && !event.shiftKey && term.hasSelection()) {
       return false; // Let VS Code/browser handle copy
     }
 
     // Exception: Cmd+V should paste (handled separately)
-    if (event.key === 'v' && !event.shiftKey) {
+    if (event.key === "v" && !event.shiftKey) {
       return false; // Let browser handle paste
     }
 
@@ -135,6 +139,7 @@ PTY receives input
 ## User Customization (Future)
 
 Add settings for power users:
+
 ```json
 {
   "contributes": {
@@ -163,12 +168,14 @@ For MVP, skip user customization - defaults should cover 95% of cases.
 ## Edge Cases
 
 ### Ctrl+C Behavior
+
 - With selection: Should copy (pass through)
 - Without selection: Should send interrupt (capture)
 
 Implementation:
+
 ```typescript
-if (event.ctrlKey && event.key === 'c') {
+if (event.ctrlKey && event.key === "c") {
   if (term.hasSelection()) {
     return false; // Let VS Code/browser handle copy
   }
@@ -177,10 +184,12 @@ if (event.ctrlKey && event.key === 'c') {
 ```
 
 ### Alt Key on Mac
+
 - `Alt+letter` produces special characters (e.g., `Alt+3` = `#`)
 - Should go to terminal for special character input
 
 ### Function Keys
+
 - F1-F12 without modifiers go to terminal
 - F1 with modifiers might be VS Code help - pass through
 

@@ -1,11 +1,20 @@
+import * as crypto from "node:crypto";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type { BooTTYPanelViewProvider } from "./panel-view-provider";
+import { ProfileWriter } from "./profile-writer";
 import { PtyService } from "./pty-service";
 import {
 	createVSCodeConfigGetter,
 	resolveDisplaySettings,
 } from "./settings-resolver";
 import {
+	BENCHMARK_CONFIG_APPLY_DELAY_MS,
+	BENCHMARK_COOLDOWN_MS,
+	BENCHMARK_READY_TIMEOUT_MS,
+	BENCHMARK_SCENARIOS,
+	BENCHMARK_SENTINEL_TIMEOUT_MS,
 	createTerminalId,
 	EXIT_CLOSE_DELAY_MS,
 	MAX_DATA_QUEUE_SIZE,
@@ -15,6 +24,8 @@ import {
 import type {
 	ExtensionMessage,
 	PanelWebviewMessage,
+	ProfileEvent,
+	RendererMode,
 	RuntimeConfig,
 	TerminalGroup,
 	TerminalTheme,
@@ -117,6 +128,108 @@ interface PersistedTerminalState {
 	orderIndex: number;
 }
 
+interface ProfileSession {
+	sessionId: string;
+	startedAt: number;
+	outputPaths: string[];
+	writers: ProfileWriter[];
+}
+
+interface ProfilingStatus {
+	active: boolean;
+	sessionId?: string;
+	outputPaths?: string[];
+}
+
+type BenchmarkLocation = TerminalLocation;
+type BenchmarkRenderer = "auto" | "webgl" | "canvas";
+type BenchmarkScenario = keyof typeof BENCHMARK_SCENARIOS;
+
+interface BenchmarkOptions {
+	scenario?: BenchmarkScenario;
+	lineCount?: number;
+	location?: BenchmarkLocation;
+	renderer?: BenchmarkRenderer;
+	command?: string;
+	directLinesPerWrite?: number;
+	directWritesPerFrame?: number;
+	ptyMaxLinesPerFrame?: number;
+	ptyMaxFrameMs?: number;
+	ptyMaxBytesPerFrame?: number;
+	ptyAdaptiveDrain?: boolean;
+	ptyAdaptiveFrameMs?: number;
+	ptyAdaptiveQueueThreshold?: number;
+	ptyAdaptiveMaxLinesPerFrame?: number;
+	ptyAdaptiveMaxLinesPerFrameWebgl?: number;
+	ptyAdaptiveAutoTune?: boolean;
+	ptyAdaptiveMinBytesPerFrame?: number;
+	ptyAdaptiveQueueBytesThreshold?: number;
+	ptyAdaptiveQueueHysteresisRatio?: number;
+	profile?: boolean;
+	timeoutMs?: number;
+}
+
+interface BenchmarkResult {
+	terminalId: TerminalId;
+	scenario: BenchmarkScenario;
+	renderer: BenchmarkRenderer;
+	location: BenchmarkLocation;
+	lineCount: number;
+	startedAt: number;
+	finishedAt: number;
+	durationMs: number;
+	outputPath?: string;
+	profile?: {
+		sessionId?: string;
+		outputPaths?: string[];
+	};
+}
+
+interface BenchmarkWatcher {
+	prefix: string;
+	prefixBytes: Uint8Array;
+	sentinel: string;
+	sentinelBytes: Uint8Array;
+	targetLines: number;
+	seenLines: number;
+	resolve: () => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+	tail: string;
+	tailBytes: Uint8Array;
+}
+
+interface BenchmarkCommandWatcher {
+	prefix: string;
+	prefixBytes: Uint8Array;
+	resolve: (outputPath: string) => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+	tail: string;
+	tailBytes: Uint8Array;
+}
+
+interface BenchmarkDrainWatcher {
+	token: string;
+	resolve: () => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+}
+
+interface BenchmarkDirectWriteWatcher {
+	token: string;
+	resolve: () => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+}
+
+interface ConfigApplyWatcher {
+	token: string;
+	resolve: () => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+}
+
 /** Persisted workspace state */
 interface PersistedWorkspaceState {
 	terminals: PersistedTerminalState[];
@@ -127,6 +240,10 @@ interface PersistedWorkspaceState {
 
 /** Storage keys for workspaceState */
 const STATE_KEY = "bootty.terminalState";
+const PROFILE_OUTPUT_SUBDIR = "bootty-profiles";
+const PROFILE_FILE_PREFIX = "bootty-profile";
+const PROFILE_FILE_EXTENSION = ".jsonl";
+const PROFILE_STOP_GRACE_MS = 300;
 
 export class TerminalManager implements vscode.Disposable {
 	private terminals = new Map<TerminalId, TerminalInstance>();
@@ -150,6 +267,24 @@ export class TerminalManager implements vscode.Disposable {
 	private panelProvider: BooTTYPanelViewProvider;
 	private usedIndices = new Set<number>(); // Track used indices for reuse
 	private outputChannel: vscode.OutputChannel;
+	private profileSession?: ProfileSession;
+	private benchmarkWatchers = new Map<TerminalId, BenchmarkWatcher>();
+	private benchmarkCommandWatchers = new Map<
+		TerminalId,
+		BenchmarkCommandWatcher
+	>();
+	private benchmarkDrainWatchers = new Map<TerminalId, BenchmarkDrainWatcher>();
+	private benchmarkDirectWriteWatchers = new Map<
+		TerminalId,
+		BenchmarkDirectWriteWatcher
+	>();
+	private runtimeConfigOverride?: Partial<RuntimeConfig>;
+	private configApplyWatchers = new Map<string, ConfigApplyWatcher>();
+	private readonly ptyDecoder = new TextDecoder("utf-8");
+	private ptyOutputBatchConfig: {
+		maxBytes: number;
+		maxDelayMs: number;
+	};
 
 	constructor(
 		context: vscode.ExtensionContext,
@@ -159,6 +294,7 @@ export class TerminalManager implements vscode.Disposable {
 		this.panelProvider = panelProvider;
 		this.ptyService = new PtyService();
 		this.outputChannel = vscode.window.createOutputChannel("BooTTY");
+		this.ptyOutputBatchConfig = this.resolvePtyOutputBatchConfig();
 
 		// Restore persisted state
 		this.loadPersistedState();
@@ -171,6 +307,7 @@ export class TerminalManager implements vscode.Disposable {
 					e.affectsConfiguration("editor.fontFamily") ||
 					e.affectsConfiguration("editor.fontSize")
 				) {
+					this.ptyOutputBatchConfig = this.resolvePtyOutputBatchConfig();
 					this.broadcastSettingsUpdate();
 				}
 				// Theme colors from workbench.colorCustomizations
@@ -230,6 +367,672 @@ export class TerminalManager implements vscode.Disposable {
 		return false;
 	}
 
+	private buildBenchmarkCommand(
+		scenario: BenchmarkScenario,
+		lineCount: number,
+		sentinel: string,
+	): string {
+		const label = BENCHMARK_SCENARIOS[scenario].label;
+		return [
+			"i=1;",
+			`while [ $i -le ${lineCount} ]; do`,
+			`printf '${label}-%05d\\n' "$i";`,
+			"i=$((i+1));",
+			"done;",
+			`printf '%s\\n' '${sentinel}';`,
+		].join(" ");
+	}
+
+	private buildBenchmarkPayload(label: string, lineCount: number): string {
+		const lines: string[] = [];
+		for (let i = 1; i <= lineCount; i += 1) {
+			lines.push(`${label}-${String(i).padStart(5, "0")}`);
+		}
+		return `${lines.join("\n")}\n`;
+	}
+
+	private parseBenchmarkOptions(input: unknown): BenchmarkOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const scenario =
+			typeof raw.scenario === "string" &&
+			Object.hasOwn(BENCHMARK_SCENARIOS, raw.scenario)
+				? (raw.scenario as BenchmarkScenario)
+				: undefined;
+		const lineCount =
+			typeof raw.lineCount === "number" && Number.isFinite(raw.lineCount)
+				? raw.lineCount
+				: undefined;
+		const location =
+			raw.location === "panel" || raw.location === "editor"
+				? raw.location
+				: undefined;
+		const renderer =
+			raw.renderer === "auto" ||
+			raw.renderer === "webgl" ||
+			raw.renderer === "canvas"
+				? raw.renderer
+				: undefined;
+		const command = typeof raw.command === "string" ? raw.command : undefined;
+		const ptyMaxLinesPerFrame =
+			typeof raw.ptyMaxLinesPerFrame === "number" &&
+			Number.isFinite(raw.ptyMaxLinesPerFrame)
+				? raw.ptyMaxLinesPerFrame
+				: undefined;
+		const directLinesPerWrite =
+			typeof raw.directLinesPerWrite === "number" &&
+			Number.isFinite(raw.directLinesPerWrite)
+				? raw.directLinesPerWrite
+				: undefined;
+		const directWritesPerFrame =
+			typeof raw.directWritesPerFrame === "number" &&
+			Number.isFinite(raw.directWritesPerFrame)
+				? raw.directWritesPerFrame
+				: undefined;
+		const ptyMaxFrameMs =
+			typeof raw.ptyMaxFrameMs === "number" &&
+			Number.isFinite(raw.ptyMaxFrameMs)
+				? raw.ptyMaxFrameMs
+				: undefined;
+		const ptyMaxBytesPerFrame =
+			typeof raw.ptyMaxBytesPerFrame === "number" &&
+			Number.isFinite(raw.ptyMaxBytesPerFrame)
+				? raw.ptyMaxBytesPerFrame
+				: undefined;
+		const ptyAdaptiveDrain =
+			typeof raw.ptyAdaptiveDrain === "boolean"
+				? raw.ptyAdaptiveDrain
+				: undefined;
+		const ptyAdaptiveFrameMs =
+			typeof raw.ptyAdaptiveFrameMs === "number" &&
+			Number.isFinite(raw.ptyAdaptiveFrameMs)
+				? raw.ptyAdaptiveFrameMs
+				: undefined;
+		const ptyAdaptiveQueueThreshold =
+			typeof raw.ptyAdaptiveQueueThreshold === "number" &&
+			Number.isFinite(raw.ptyAdaptiveQueueThreshold)
+				? raw.ptyAdaptiveQueueThreshold
+				: undefined;
+		const ptyAdaptiveMaxLinesPerFrame =
+			typeof raw.ptyAdaptiveMaxLinesPerFrame === "number" &&
+			Number.isFinite(raw.ptyAdaptiveMaxLinesPerFrame)
+				? raw.ptyAdaptiveMaxLinesPerFrame
+				: undefined;
+		const ptyAdaptiveMaxLinesPerFrameWebgl =
+			typeof raw.ptyAdaptiveMaxLinesPerFrameWebgl === "number" &&
+			Number.isFinite(raw.ptyAdaptiveMaxLinesPerFrameWebgl)
+				? raw.ptyAdaptiveMaxLinesPerFrameWebgl
+				: undefined;
+		const ptyAdaptiveAutoTune =
+			typeof raw.ptyAdaptiveAutoTune === "boolean"
+				? raw.ptyAdaptiveAutoTune
+				: undefined;
+		const ptyAdaptiveMinBytesPerFrame =
+			typeof raw.ptyAdaptiveMinBytesPerFrame === "number" &&
+			Number.isFinite(raw.ptyAdaptiveMinBytesPerFrame)
+				? raw.ptyAdaptiveMinBytesPerFrame
+				: undefined;
+		const ptyAdaptiveQueueBytesThreshold =
+			typeof raw.ptyAdaptiveQueueBytesThreshold === "number" &&
+			Number.isFinite(raw.ptyAdaptiveQueueBytesThreshold)
+				? raw.ptyAdaptiveQueueBytesThreshold
+				: undefined;
+		const ptyAdaptiveQueueHysteresisRatio =
+			typeof raw.ptyAdaptiveQueueHysteresisRatio === "number" &&
+			Number.isFinite(raw.ptyAdaptiveQueueHysteresisRatio)
+				? raw.ptyAdaptiveQueueHysteresisRatio
+				: undefined;
+		const profile = typeof raw.profile === "boolean" ? raw.profile : undefined;
+		const timeoutMs =
+			typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)
+				? raw.timeoutMs
+				: undefined;
+		return {
+			scenario,
+			lineCount,
+			location,
+			renderer,
+			command,
+			directLinesPerWrite,
+			directWritesPerFrame,
+			ptyMaxLinesPerFrame,
+			ptyMaxFrameMs,
+			ptyMaxBytesPerFrame,
+			ptyAdaptiveDrain,
+			ptyAdaptiveFrameMs,
+			ptyAdaptiveQueueThreshold,
+			ptyAdaptiveMaxLinesPerFrame,
+			ptyAdaptiveMaxLinesPerFrameWebgl,
+			ptyAdaptiveAutoTune,
+			ptyAdaptiveMinBytesPerFrame,
+			ptyAdaptiveQueueBytesThreshold,
+			ptyAdaptiveQueueHysteresisRatio,
+			profile,
+			timeoutMs,
+		};
+	}
+
+	public async runBenchmark(options: unknown = {}): Promise<BenchmarkResult> {
+		const parsed = this.parseBenchmarkOptions(options);
+		const scenario = parsed.scenario ?? "ptyStress";
+		const scenarioDefaults = BENCHMARK_SCENARIOS[scenario];
+		if (!scenarioDefaults) {
+			throw new Error(`Unknown benchmark scenario: ${scenario}`);
+		}
+		const rawLineCount = parsed.lineCount ?? scenarioDefaults.lineCount;
+		const lineCount =
+			scenarioDefaults.mode === "command"
+				? Math.max(0, Math.floor(rawLineCount))
+				: Math.max(1, Math.floor(rawLineCount));
+		const location: BenchmarkLocation = parsed.location ?? "panel";
+		const renderer: BenchmarkRenderer = parsed.renderer ?? "auto";
+		const profileEnabled = parsed.profile ?? true;
+		const timeoutMs = parsed.timeoutMs ?? BENCHMARK_SENTINEL_TIMEOUT_MS;
+
+		const previousOverride = this.runtimeConfigOverride;
+		const override: Partial<RuntimeConfig> = {};
+		if (renderer) {
+			override.renderer = renderer;
+		}
+		if (parsed.ptyMaxLinesPerFrame !== undefined) {
+			override.ptyMaxLinesPerFrame = parsed.ptyMaxLinesPerFrame;
+		}
+		if (parsed.ptyMaxFrameMs !== undefined) {
+			override.ptyMaxFrameMs = parsed.ptyMaxFrameMs;
+		}
+		if (parsed.ptyMaxBytesPerFrame !== undefined) {
+			override.ptyMaxBytesPerFrame = parsed.ptyMaxBytesPerFrame;
+		}
+		if (parsed.ptyAdaptiveDrain !== undefined) {
+			override.ptyAdaptiveDrain = parsed.ptyAdaptiveDrain;
+		}
+		if (parsed.ptyAdaptiveFrameMs !== undefined) {
+			override.ptyAdaptiveFrameMs = parsed.ptyAdaptiveFrameMs;
+		}
+		if (parsed.ptyAdaptiveQueueThreshold !== undefined) {
+			override.ptyAdaptiveQueueThreshold = parsed.ptyAdaptiveQueueThreshold;
+		}
+		if (parsed.ptyAdaptiveMaxLinesPerFrame !== undefined) {
+			override.ptyAdaptiveMaxLinesPerFrame = parsed.ptyAdaptiveMaxLinesPerFrame;
+		}
+		if (parsed.ptyAdaptiveMaxLinesPerFrameWebgl !== undefined) {
+			override.ptyAdaptiveMaxLinesPerFrameWebgl =
+				parsed.ptyAdaptiveMaxLinesPerFrameWebgl;
+		}
+		if (parsed.ptyAdaptiveAutoTune !== undefined) {
+			override.ptyAdaptiveAutoTune = parsed.ptyAdaptiveAutoTune;
+		}
+		if (parsed.ptyAdaptiveMinBytesPerFrame !== undefined) {
+			override.ptyAdaptiveMinBytesPerFrame = parsed.ptyAdaptiveMinBytesPerFrame;
+		}
+		if (parsed.ptyAdaptiveQueueBytesThreshold !== undefined) {
+			override.ptyAdaptiveQueueBytesThreshold =
+				parsed.ptyAdaptiveQueueBytesThreshold;
+		}
+		if (parsed.ptyAdaptiveQueueHysteresisRatio !== undefined) {
+			override.ptyAdaptiveQueueHysteresisRatio =
+				parsed.ptyAdaptiveQueueHysteresisRatio;
+		}
+		if (Object.keys(override).length > 0) {
+			this.runtimeConfigOverride = override;
+		}
+
+		const config = vscode.workspace.getConfiguration("bootty");
+		const configTarget = vscode.workspace.workspaceFolders?.length
+			? vscode.ConfigurationTarget.Workspace
+			: vscode.ConfigurationTarget.Global;
+		const previousRenderer = config.inspect<BenchmarkRenderer>("renderer");
+		const previousMaxLines = config.inspect<number>("pty.maxLinesPerFrame");
+		const previousMaxFrameMs = config.inspect<number>("pty.maxFrameMs");
+		const previousMaxBytes = config.inspect<number>("pty.maxBytesPerFrame");
+		const previousAdaptiveDrain = config.inspect<boolean>("pty.adaptiveDrain");
+		const previousAdaptiveFrameMs = config.inspect<number>(
+			"pty.adaptiveFrameMs",
+		);
+		const previousAdaptiveQueueThreshold = config.inspect<number>(
+			"pty.adaptiveQueueThreshold",
+		);
+		const previousAdaptiveMaxLines = config.inspect<number>(
+			"pty.adaptiveMaxLinesPerFrame",
+		);
+		const previousAdaptiveMaxLinesWebgl = config.inspect<number>(
+			"pty.adaptiveMaxLinesPerFrameWebgl",
+		);
+		const previousAdaptiveAutoTune = config.inspect<boolean>(
+			"pty.adaptiveAutoTune",
+		);
+		const previousAdaptiveMinBytesPerFrame = config.inspect<number>(
+			"pty.adaptiveMinBytesPerFrame",
+		);
+		const previousAdaptiveQueueBytesThreshold = config.inspect<number>(
+			"pty.adaptiveQueueBytesThreshold",
+		);
+		const previousAdaptiveQueueHysteresisRatio = config.inspect<number>(
+			"pty.adaptiveQueueHysteresisRatio",
+		);
+		const updates: Array<Thenable<void>> = [];
+		const restore: Array<Thenable<void>> = [];
+		const prevRendererValue =
+			configTarget === vscode.ConfigurationTarget.Workspace
+				? previousRenderer?.workspaceValue
+				: previousRenderer?.globalValue;
+		if (renderer && renderer !== prevRendererValue) {
+			updates.push(config.update("renderer", renderer, configTarget));
+			restore.push(
+				config.update(
+					"renderer",
+					prevRendererValue === undefined ? undefined : prevRendererValue,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyMaxLinesPerFrame !== undefined) {
+			updates.push(
+				config.update(
+					"pty.maxLinesPerFrame",
+					parsed.ptyMaxLinesPerFrame,
+					configTarget,
+				),
+			);
+			const prevValue =
+				configTarget === vscode.ConfigurationTarget.Workspace
+					? previousMaxLines?.workspaceValue
+					: previousMaxLines?.globalValue;
+			restore.push(
+				config.update(
+					"pty.maxLinesPerFrame",
+					prevValue === undefined ? undefined : prevValue,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyMaxFrameMs !== undefined) {
+			updates.push(
+				config.update("pty.maxFrameMs", parsed.ptyMaxFrameMs, configTarget),
+			);
+			restore.push(
+				config.update(
+					"pty.maxFrameMs",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousMaxFrameMs?.workspaceValue
+						: previousMaxFrameMs?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyMaxBytesPerFrame !== undefined) {
+			updates.push(
+				config.update(
+					"pty.maxBytesPerFrame",
+					parsed.ptyMaxBytesPerFrame,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.maxBytesPerFrame",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousMaxBytes?.workspaceValue
+						: previousMaxBytes?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveDrain !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveDrain",
+					parsed.ptyAdaptiveDrain,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveDrain",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveDrain?.workspaceValue
+						: previousAdaptiveDrain?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveFrameMs !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveFrameMs",
+					parsed.ptyAdaptiveFrameMs,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveFrameMs",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveFrameMs?.workspaceValue
+						: previousAdaptiveFrameMs?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveQueueThreshold !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveQueueThreshold",
+					parsed.ptyAdaptiveQueueThreshold,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveQueueThreshold",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveQueueThreshold?.workspaceValue
+						: previousAdaptiveQueueThreshold?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveMaxLinesPerFrame !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveMaxLinesPerFrame",
+					parsed.ptyAdaptiveMaxLinesPerFrame,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveMaxLinesPerFrame",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveMaxLines?.workspaceValue
+						: previousAdaptiveMaxLines?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveMaxLinesPerFrameWebgl !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveMaxLinesPerFrameWebgl",
+					parsed.ptyAdaptiveMaxLinesPerFrameWebgl,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveMaxLinesPerFrameWebgl",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveMaxLinesWebgl?.workspaceValue
+						: previousAdaptiveMaxLinesWebgl?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveAutoTune !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveAutoTune",
+					parsed.ptyAdaptiveAutoTune,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveAutoTune",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveAutoTune?.workspaceValue
+						: previousAdaptiveAutoTune?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveMinBytesPerFrame !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveMinBytesPerFrame",
+					parsed.ptyAdaptiveMinBytesPerFrame,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveMinBytesPerFrame",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveMinBytesPerFrame?.workspaceValue
+						: previousAdaptiveMinBytesPerFrame?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveQueueBytesThreshold !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveQueueBytesThreshold",
+					parsed.ptyAdaptiveQueueBytesThreshold,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveQueueBytesThreshold",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveQueueBytesThreshold?.workspaceValue
+						: previousAdaptiveQueueBytesThreshold?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (parsed.ptyAdaptiveQueueHysteresisRatio !== undefined) {
+			updates.push(
+				config.update(
+					"pty.adaptiveQueueHysteresisRatio",
+					parsed.ptyAdaptiveQueueHysteresisRatio,
+					configTarget,
+				),
+			);
+			restore.push(
+				config.update(
+					"pty.adaptiveQueueHysteresisRatio",
+					(configTarget === vscode.ConfigurationTarget.Workspace
+						? previousAdaptiveQueueHysteresisRatio?.workspaceValue
+						: previousAdaptiveQueueHysteresisRatio?.globalValue) ?? undefined,
+					configTarget,
+				),
+			);
+		}
+		if (updates.length > 0 || this.runtimeConfigOverride) {
+			await Promise.all(updates);
+			this.broadcastSettingsUpdate();
+			await new Promise((resolve) =>
+				setTimeout(resolve, BENCHMARK_CONFIG_APPLY_DELAY_MS),
+			);
+		}
+
+		if (location === "panel") {
+			await this.panelProvider.show();
+			await this.waitForPanelReady(BENCHMARK_READY_TIMEOUT_MS);
+			// Ensure runtime config is applied after the panel is ready.
+			if (updates.length > 0 || this.runtimeConfigOverride) {
+				await this.waitForPanelConfigApplied(timeoutMs);
+			}
+		}
+
+		const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const terminalId = this.createTerminal({
+			location,
+			cwd: workspaceCwd,
+		});
+		if (!terminalId) {
+			throw new Error("Failed to create benchmark terminal.");
+		}
+
+		await this.waitForTerminalReady(terminalId, BENCHMARK_READY_TIMEOUT_MS);
+
+		let profileStatus: ProfilingStatus | null = null;
+		let startedProfiling = false;
+		if (profileEnabled) {
+			profileStatus = await this.startProfiling();
+			startedProfiling = Boolean(
+				profileStatus?.active && profileStatus.sessionId,
+			);
+		}
+
+		const startedAt = Date.now();
+		if (scenarioDefaults.mode === "pty") {
+			const prefix = `${scenarioDefaults.label}-`;
+			const sentinel = `__bootty_bench_done_${crypto.randomUUID()}__`;
+			const command = this.buildBenchmarkCommand(scenario, lineCount, sentinel);
+			const sentinelPromise = this.waitForBenchmarkLines(
+				terminalId,
+				prefix,
+				lineCount,
+				sentinel,
+				timeoutMs,
+			);
+			this.ptyService.write(terminalId, `${command}\n`);
+			await sentinelPromise;
+			await this.waitForBenchmarkDrain(terminalId, timeoutMs);
+		} else if (scenarioDefaults.mode === "direct") {
+			const linesPerWrite =
+				parsed.directLinesPerWrite ??
+				scenarioDefaults.directLinesPerWrite ??
+				lineCount;
+			const repeat = Math.floor(lineCount / linesPerWrite);
+			const remainder = lineCount % linesPerWrite;
+			if (repeat <= 0 && remainder <= 0) {
+				throw new Error("Direct benchmark must write at least one line.");
+			}
+			const payload = this.buildBenchmarkPayload(
+				scenarioDefaults.label,
+				linesPerWrite,
+			);
+			const finalPayload =
+				remainder > 0
+					? this.buildBenchmarkPayload(scenarioDefaults.label, remainder)
+					: undefined;
+			const writesPerFrame =
+				parsed.directWritesPerFrame ??
+				scenarioDefaults.directWritesPerFrame ??
+				0;
+			await this.waitForBenchmarkDirectWrite(
+				terminalId,
+				payload,
+				repeat,
+				finalPayload,
+				writesPerFrame,
+				timeoutMs,
+			);
+		} else if (scenarioDefaults.mode === "command") {
+			const command =
+				parsed.command ??
+				(scenarioDefaults.commandRelative
+					? path.resolve(
+							this.context.extensionPath,
+							scenarioDefaults.commandRelative,
+						)
+					: undefined);
+			if (!command) {
+				throw new Error("Benchmark command is not configured.");
+			}
+			const prefix = scenarioDefaults.outputPrefix ?? "Results saved to:";
+			const commandPromise = this.waitForBenchmarkCommandOutput(
+				terminalId,
+				prefix,
+				timeoutMs,
+			);
+			const escaped = command.replaceAll('"', '\\"');
+			const quotedCommand = command.includes(" ") ? `"${escaped}"` : escaped;
+			this.ptyService.write(terminalId, `${quotedCommand}\n`);
+			const outputPath = await commandPromise;
+			const finishedAt = Date.now();
+			await new Promise((resolve) =>
+				setTimeout(resolve, BENCHMARK_COOLDOWN_MS),
+			);
+
+			let stopStatus: ProfilingStatus | null = null;
+			if (profileEnabled && startedProfiling) {
+				stopStatus = await this.stopProfiling();
+			}
+
+			if (restore.length > 0) {
+				await Promise.all(restore);
+			}
+			this.runtimeConfigOverride = previousOverride;
+			if (restore.length > 0 || previousOverride) {
+				this.broadcastSettingsUpdate();
+				await new Promise((resolve) =>
+					setTimeout(resolve, BENCHMARK_CONFIG_APPLY_DELAY_MS),
+				);
+			}
+
+			this.destroyTerminalById(terminalId);
+
+			return {
+				terminalId,
+				scenario,
+				renderer,
+				location,
+				lineCount,
+				startedAt,
+				finishedAt,
+				durationMs: finishedAt - startedAt,
+				outputPath,
+				profile:
+					profileEnabled && (profileStatus || stopStatus)
+						? {
+								sessionId: stopStatus?.sessionId ?? profileStatus?.sessionId,
+								outputPaths:
+									stopStatus?.outputPaths ?? profileStatus?.outputPaths,
+							}
+						: undefined,
+			};
+		} else {
+			throw new Error(`Unsupported benchmark mode: ${scenarioDefaults.mode}`);
+		}
+		const finishedAt = Date.now();
+
+		await new Promise((resolve) => setTimeout(resolve, BENCHMARK_COOLDOWN_MS));
+
+		let stopStatus: ProfilingStatus | null = null;
+		if (profileEnabled && startedProfiling) {
+			stopStatus = await this.stopProfiling();
+		}
+
+		if (restore.length > 0) {
+			await Promise.all(restore);
+		}
+		this.runtimeConfigOverride = previousOverride;
+		if (restore.length > 0 || previousOverride) {
+			this.broadcastSettingsUpdate();
+			await new Promise((resolve) =>
+				setTimeout(resolve, BENCHMARK_CONFIG_APPLY_DELAY_MS),
+			);
+		}
+
+		this.destroyTerminalById(terminalId);
+
+		return {
+			terminalId,
+			scenario,
+			renderer,
+			location,
+			lineCount,
+			startedAt,
+			finishedAt,
+			durationMs: finishedAt - startedAt,
+			profile:
+				profileEnabled && (profileStatus || stopStatus)
+					? {
+							sessionId: stopStatus?.sessionId ?? profileStatus?.sessionId,
+							outputPaths:
+								stopStatus?.outputPaths ?? profileStatus?.outputPaths,
+						}
+					: undefined,
+		};
+	}
+
 	/** Broadcast updated settings to all ready terminals */
 	private broadcastSettingsUpdate(): void {
 		const settings = getDisplaySettings();
@@ -287,13 +1090,507 @@ export class TerminalManager implements vscode.Disposable {
 	/** Get runtime config from VS Code settings */
 	private getRuntimeConfig(): RuntimeConfig {
 		const config = vscode.workspace.getConfiguration("bootty");
-		const bellStyle = config.get<"visual" | "none">("bell", "visual");
-		const renderer = config.get<"auto" | "webgl" | "canvas">(
-			"renderer",
-			"auto",
+		const bellStyle = config.get<"visual" | "none">("bell") ?? "visual";
+		const renderer =
+			config.get<"auto" | "webgl" | "canvas">("renderer") ?? "auto";
+		const debugLog = config.get<string>("debugLog") ?? "";
+		const ptyMaxLinesPerFrame = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.maxLinesPerFrame") ?? 0),
 		);
-		const debugLog = config.get<string>("debugLog", "");
-		return { bellStyle, renderer, debugLog };
+		const ptyMaxFrameMs = Math.max(
+			0,
+			config.get<number>("pty.maxFrameMs") ?? 0,
+		);
+		const ptyMaxBytesPerFrame = Math.max(
+			0,
+			config.get<number>("pty.maxBytesPerFrame") ?? 0,
+		);
+		const ptyAdaptiveDrain = config.get<boolean>("pty.adaptiveDrain") ?? true;
+		const ptyAdaptiveFrameMs = Math.max(
+			0,
+			config.get<number>("pty.adaptiveFrameMs") ?? 2,
+		);
+		const ptyAdaptiveQueueThreshold = Math.max(
+			0,
+			config.get<number>("pty.adaptiveQueueThreshold") ?? 10,
+		);
+		const ptyAdaptiveMaxLinesPerFrame = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.adaptiveMaxLinesPerFrame") ?? 500),
+		);
+		const ptyAdaptiveMaxLinesPerFrameWebgl = Math.max(
+			0,
+			Math.floor(
+				config.get<number>("pty.adaptiveMaxLinesPerFrameWebgl") ?? 3000,
+			),
+		);
+		const ptyAdaptiveAutoTune =
+			config.get<boolean>("pty.adaptiveAutoTune") ?? true;
+		const ptyAdaptiveMinBytesPerFrame = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.adaptiveMinBytesPerFrame") ?? 0),
+		);
+		const ptyAdaptiveQueueBytesThreshold = Math.max(
+			0,
+			config.get<number>("pty.adaptiveQueueBytesThreshold") ?? 0,
+		);
+		const ptyAdaptiveQueueHysteresisRatio = Math.max(
+			0,
+			config.get<number>("pty.adaptiveQueueHysteresisRatio") ?? 0,
+		);
+		const base = {
+			bellStyle,
+			renderer,
+			debugLog,
+			ptyMaxLinesPerFrame,
+			ptyMaxFrameMs,
+			ptyMaxBytesPerFrame,
+			ptyAdaptiveDrain,
+			ptyAdaptiveFrameMs,
+			ptyAdaptiveQueueThreshold,
+			ptyAdaptiveMaxLinesPerFrame,
+			ptyAdaptiveMaxLinesPerFrameWebgl,
+			ptyAdaptiveAutoTune,
+			ptyAdaptiveMinBytesPerFrame,
+			ptyAdaptiveQueueBytesThreshold,
+			ptyAdaptiveQueueHysteresisRatio,
+		};
+		if (this.runtimeConfigOverride) {
+			return { ...base, ...this.runtimeConfigOverride };
+		}
+		return base;
+	}
+
+	private resolvePtyOutputBatchConfig(): {
+		maxBytes: number;
+		maxDelayMs: number;
+	} {
+		const config = vscode.workspace.getConfiguration("bootty");
+		const maxBytes = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.outputBatchMaxBytes") ?? 0),
+		);
+		const maxDelayMs = Math.max(
+			0,
+			config.get<number>("pty.outputBatchMaxDelayMs") ?? 0,
+		);
+		return { maxBytes, maxDelayMs };
+	}
+
+	private async waitForPanelReady(timeoutMs: number): Promise<void> {
+		if (this.panelProvider.isReady) return;
+		const deadline = Date.now() + timeoutMs;
+		while (!this.panelProvider.isReady) {
+			if (Date.now() > deadline) {
+				throw new Error("Panel webview did not become ready in time.");
+			}
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	}
+
+	private async waitForTerminalReady(
+		id: TerminalId,
+		timeoutMs: number,
+	): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (true) {
+			const instance = this.terminals.get(id);
+			if (instance?.ready) return;
+			if (!instance) {
+				throw new Error(`Terminal ${id} no longer exists.`);
+			}
+			if (Date.now() > deadline) {
+				throw new Error(`Terminal ${id} did not become ready in time.`);
+			}
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	}
+
+	private waitForBenchmarkLines(
+		id: TerminalId,
+		prefix: string,
+		targetLines: number,
+		sentinel: string,
+		timeoutMs: number,
+	): Promise<void> {
+		if (this.benchmarkWatchers.has(id)) {
+			return Promise.reject(
+				new Error(`Benchmark already running for terminal ${id}.`),
+			);
+		}
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.benchmarkWatchers.delete(id);
+				reject(
+					new Error(
+						`Benchmark timed out waiting for ${targetLines} lines (${prefix}).`,
+					),
+				);
+			}, timeoutMs);
+			this.benchmarkWatchers.set(id, {
+				prefix,
+				prefixBytes: this.encodePtyData(prefix),
+				sentinel,
+				sentinelBytes: this.encodePtyData(sentinel),
+				targetLines,
+				seenLines: 0,
+				resolve: () => {
+					clearTimeout(timeoutId);
+					resolve();
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+				tail: "",
+				tailBytes: new Uint8Array(0),
+			});
+		});
+	}
+
+	private waitForBenchmarkCommandOutput(
+		id: TerminalId,
+		prefix: string,
+		timeoutMs: number,
+	): Promise<string> {
+		if (this.benchmarkCommandWatchers.has(id)) {
+			return Promise.reject(
+				new Error(`Benchmark command already running for terminal ${id}.`),
+			);
+		}
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.benchmarkCommandWatchers.delete(id);
+				reject(
+					new Error(`Benchmark command timed out waiting for "${prefix}".`),
+				);
+			}, timeoutMs);
+			this.benchmarkCommandWatchers.set(id, {
+				prefix,
+				prefixBytes: this.encodePtyData(prefix),
+				resolve: (outputPath) => {
+					clearTimeout(timeoutId);
+					resolve(outputPath);
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+				tail: "",
+				tailBytes: new Uint8Array(0),
+			});
+		});
+	}
+
+	private handleBenchmarkOutput(
+		id: TerminalId,
+		data: string | Uint8Array,
+	): void {
+		const watcher = this.benchmarkWatchers.get(id);
+		const commandWatcher = this.benchmarkCommandWatchers.get(id);
+		if (!watcher && !commandWatcher) return;
+
+		if (typeof data === "string") {
+			if (!watcher && commandWatcher) {
+				const combined = `${commandWatcher.tail}${data}`;
+				const prefix = commandWatcher.prefix;
+				let searchIndex = 0;
+				while (true) {
+					const matchIndex = combined.indexOf(prefix, searchIndex);
+					if (matchIndex === -1) break;
+					const lineStart =
+						matchIndex === 0 ||
+						combined[matchIndex - 1] === "\n" ||
+						combined[matchIndex - 1] === "\r";
+					if (lineStart) {
+						this.benchmarkCommandWatchers.delete(id);
+						const rest = combined.slice(matchIndex + prefix.length);
+						const line = rest.split("\n", 1)[0] ?? "";
+						const outputPath = line.replace(/\r$/, "").trim();
+						commandWatcher.resolve(outputPath);
+						return;
+					}
+					searchIndex = matchIndex + prefix.length;
+				}
+				const tailSize = prefix.length + 1;
+				commandWatcher.tail =
+					combined.length > tailSize ? combined.slice(-tailSize) : combined;
+				return;
+			}
+			const combined = `${watcher?.tail ?? commandWatcher?.tail ?? ""}${data}`;
+			let start = 0;
+			while (true) {
+				const newlineIndex = combined.indexOf("\n", start);
+				if (newlineIndex === -1) break;
+				const rawLine = combined.slice(start, newlineIndex);
+				start = newlineIndex + 1;
+				const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+				if (commandWatcher && line.startsWith(commandWatcher.prefix)) {
+					this.benchmarkCommandWatchers.delete(id);
+					const outputPath = line.slice(commandWatcher.prefix.length).trim();
+					commandWatcher.resolve(outputPath);
+					return;
+				}
+				if (!watcher) {
+					continue;
+				}
+				if (line === watcher.sentinel) {
+					this.benchmarkWatchers.delete(id);
+					watcher.resolve();
+					return;
+				}
+				if (line.startsWith(watcher.prefix)) {
+					watcher.seenLines += 1;
+					if (watcher.seenLines >= watcher.targetLines) {
+						this.benchmarkWatchers.delete(id);
+						watcher.resolve();
+						return;
+					}
+				}
+			}
+			const tail = combined.slice(start);
+			if (watcher) {
+				watcher.tail = tail;
+			}
+			if (commandWatcher) {
+				commandWatcher.tail = tail;
+			}
+			return;
+		}
+
+		if (!watcher && commandWatcher) {
+			const combined =
+				commandWatcher.tailBytes.length > 0
+					? this.concatPtyChunks(
+							[commandWatcher.tailBytes, data],
+							commandWatcher.tailBytes.length + data.length,
+						)
+					: data;
+			const combinedBuffer = this.asBuffer(combined);
+			const prefixBytes = commandWatcher.prefixBytes;
+			const prefixBuffer = this.asBuffer(prefixBytes);
+			let searchIndex = 0;
+			while (true) {
+				const matchIndex = combinedBuffer.indexOf(prefixBuffer, searchIndex);
+				if (matchIndex === -1) break;
+				const lineStart =
+					matchIndex === 0 ||
+					combined[matchIndex - 1] === 0x0a ||
+					combined[matchIndex - 1] === 0x0d;
+				if (lineStart) {
+					this.benchmarkCommandWatchers.delete(id);
+					const restStart = matchIndex + prefixBytes.length;
+					const newlineIndex = combinedBuffer.indexOf(0x0a, restStart);
+					const rawEnd = newlineIndex === -1 ? combined.length : newlineIndex;
+					let lineBytes = combinedBuffer.subarray(restStart, rawEnd);
+					if (
+						lineBytes.length > 0 &&
+						lineBytes[lineBytes.length - 1] === 0x0d
+					) {
+						lineBytes = lineBytes.subarray(0, lineBytes.length - 1);
+					}
+					const outputPath = this.decodePtyData(lineBytes).trim();
+					commandWatcher.resolve(outputPath);
+					return;
+				}
+				searchIndex = matchIndex + prefixBytes.length;
+			}
+			const tailSize = prefixBytes.length + 1;
+			const tailStart =
+				combined.length > tailSize ? combined.length - tailSize : 0;
+			commandWatcher.tailBytes = this.copyBytes(combined, tailStart);
+			return;
+		}
+
+		const seedTail =
+			watcher?.tailBytes ?? commandWatcher?.tailBytes ?? new Uint8Array(0);
+		const combined =
+			seedTail.length > 0
+				? this.concatPtyChunks([seedTail, data], seedTail.length + data.length)
+				: data;
+		const combinedBuffer = this.asBuffer(combined);
+		let start = 0;
+		while (true) {
+			const newlineIndex = combinedBuffer.indexOf(0x0a, start);
+			if (newlineIndex === -1) break;
+			let lineBytes = combinedBuffer.subarray(start, newlineIndex);
+			start = newlineIndex + 1;
+			if (lineBytes.length > 0 && lineBytes[lineBytes.length - 1] === 0x0d) {
+				lineBytes = lineBytes.subarray(0, lineBytes.length - 1);
+			}
+			if (
+				commandWatcher &&
+				this.bytesStartsWith(lineBytes, commandWatcher.prefixBytes)
+			) {
+				this.benchmarkCommandWatchers.delete(id);
+				const outputBytes = lineBytes.subarray(
+					commandWatcher.prefixBytes.length,
+				);
+				const outputPath = this.decodePtyData(outputBytes).trim();
+				commandWatcher.resolve(outputPath);
+				return;
+			}
+			if (!watcher) {
+				continue;
+			}
+			if (this.bytesEqual(lineBytes, watcher.sentinelBytes)) {
+				this.benchmarkWatchers.delete(id);
+				watcher.resolve();
+				return;
+			}
+			if (this.bytesStartsWith(lineBytes, watcher.prefixBytes)) {
+				watcher.seenLines += 1;
+				if (watcher.seenLines >= watcher.targetLines) {
+					this.benchmarkWatchers.delete(id);
+					watcher.resolve();
+					return;
+				}
+			}
+		}
+		const tailBytes = this.copyBytes(combined, start);
+		if (watcher) {
+			watcher.tailBytes = tailBytes;
+		}
+		if (commandWatcher) {
+			commandWatcher.tailBytes = tailBytes;
+		}
+	}
+
+	private waitForBenchmarkDrain(
+		id: TerminalId,
+		timeoutMs: number,
+	): Promise<void> {
+		if (this.benchmarkDrainWatchers.has(id)) {
+			return Promise.reject(
+				new Error(`Benchmark drain already pending for terminal ${id}.`),
+			);
+		}
+		const token = crypto.randomUUID();
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.benchmarkDrainWatchers.delete(id);
+				reject(new Error(`Benchmark drain timed out for terminal ${id}.`));
+			}, timeoutMs);
+			this.benchmarkDrainWatchers.set(id, {
+				token,
+				resolve: () => {
+					clearTimeout(timeoutId);
+					resolve();
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+			});
+			this.postToTerminal(id, {
+				type: "bench-drain-request",
+				terminalId: id,
+				token,
+			});
+		});
+	}
+
+	private waitForBenchmarkDirectWrite(
+		id: TerminalId,
+		payload: string,
+		repeat: number,
+		finalPayload: string | undefined,
+		writesPerFrame: number,
+		timeoutMs: number,
+	): Promise<void> {
+		if (this.benchmarkDirectWriteWatchers.has(id)) {
+			return Promise.reject(
+				new Error(`Benchmark direct write already running for terminal ${id}.`),
+			);
+		}
+		const token = crypto.randomUUID();
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.benchmarkDirectWriteWatchers.delete(id);
+				reject(
+					new Error(`Benchmark direct write timed out for terminal ${id}.`),
+				);
+			}, timeoutMs);
+			this.benchmarkDirectWriteWatchers.set(id, {
+				token,
+				resolve: () => {
+					clearTimeout(timeoutId);
+					resolve();
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+			});
+			this.postToTerminal(id, {
+				type: "bench-direct-write",
+				terminalId: id,
+				token,
+				payload,
+				repeat,
+				finalPayload,
+				writesPerFrame,
+			});
+		});
+	}
+
+	private handleBenchmarkDrainComplete(id: TerminalId, token: string): void {
+		const watcher = this.benchmarkDrainWatchers.get(id);
+		if (!watcher || watcher.token !== token) return;
+		this.benchmarkDrainWatchers.delete(id);
+		watcher.resolve();
+	}
+
+	private handleBenchmarkDirectWriteComplete(
+		id: TerminalId,
+		token: string,
+	): void {
+		const watcher = this.benchmarkDirectWriteWatchers.get(id);
+		if (!watcher || watcher.token !== token) return;
+		this.benchmarkDirectWriteWatchers.delete(id);
+		watcher.resolve();
+	}
+
+	private waitForPanelConfigApplied(timeoutMs: number): Promise<void> {
+		const token = crypto.randomUUID();
+		if (this.configApplyWatchers.has(token)) {
+			return Promise.reject(new Error("Config apply token collision"));
+		}
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.configApplyWatchers.delete(token);
+				reject(new Error("Timed out waiting for config apply."));
+			}, timeoutMs);
+			this.configApplyWatchers.set(token, {
+				token,
+				resolve: () => {
+					clearTimeout(timeoutId);
+					resolve();
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+			});
+			this.panelProvider.postMessage({
+				type: "update-config",
+				config: this.getRuntimeConfig(),
+				token,
+			});
+		});
+	}
+
+	private handleConfigApplied(token: string): void {
+		const watcher = this.configApplyWatchers.get(token);
+		if (!watcher) return;
+		this.configApplyWatchers.delete(token);
+		watcher.resolve();
 	}
 
 	createTerminal(config?: Partial<TerminalConfig>): TerminalId | null {
@@ -550,6 +1847,37 @@ export class TerminalManager implements vscode.Disposable {
 					message.reason,
 				);
 				break;
+			case "config-applied":
+				this.handleConfigApplied(message.token);
+				break;
+			case "bench-drain-complete":
+				this.handleBenchmarkDrainComplete(message.terminalId, message.token);
+				break;
+			case "bench-direct-write-complete":
+				this.handleBenchmarkDirectWriteComplete(
+					message.terminalId,
+					message.token,
+				);
+				break;
+			case "profile-data":
+				this.handleProfileData(message.sessionId, message.events);
+				break;
+			case "profile-error":
+				this.handleProfileError(message.sessionId, message.error);
+				break;
+			case "webview-error": {
+				const label = message.terminalId ? `[${message.terminalId}] ` : "";
+				const detail = message.stack
+					? `${message.message}\n${message.stack}`
+					: message.message;
+				this.outputChannel.appendLine(
+					`${label}Webview (${message.scope}) error: ${detail}`,
+				);
+				vscode.window.showErrorMessage(
+					`BooTTY webview error (${message.scope}). Check the BooTTY output channel for details.`,
+				);
+				break;
+			}
 		}
 	}
 
@@ -628,42 +1956,215 @@ export class TerminalManager implements vscode.Disposable {
 		vscode.window.showInformationMessage(message);
 	}
 
-	private handlePtyData(id: TerminalId, data: string): void {
+	private decodePtyData(data: Uint8Array): string {
+		return this.ptyDecoder.decode(data);
+	}
+
+	private hasOscSequence(data: Uint8Array): boolean {
+		if (data.length < 2) return false;
+		for (let i = 0; i < data.length - 1; i += 1) {
+			if (data[i] === 0x1b && data[i + 1] === 0x5d) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private bytesStartsWith(data: Uint8Array, prefix: Uint8Array): boolean {
+		if (prefix.length > data.length) return false;
+		for (let i = 0; i < prefix.length; i += 1) {
+			if (data[i] !== prefix[i]) return false;
+		}
+		return true;
+	}
+
+	private bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+		if (a.length !== b.length) return false;
+		for (let i = 0; i < a.length; i += 1) {
+			if (a[i] !== b[i]) return false;
+		}
+		return true;
+	}
+
+	private asBuffer(data: Uint8Array): Buffer {
+		return Buffer.isBuffer(data)
+			? data
+			: Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+	}
+
+	private copyBytes(data: Uint8Array, start: number, end?: number): Uint8Array {
+		const view = data.subarray(start, end);
+		const copy = new Uint8Array(view.length);
+		copy.set(view);
+		return copy;
+	}
+
+	private encodePtyData(data: string): Uint8Array {
+		return Buffer.from(data, "utf8");
+	}
+
+	private concatPtyChunks(
+		chunks: Uint8Array[],
+		totalBytes: number,
+	): Uint8Array {
+		if (chunks.length === 0 || totalBytes === 0) {
+			return new Uint8Array(0);
+		}
+		if (chunks.length === 1) return chunks[0];
+		const output = new Uint8Array(totalBytes);
+		let offset = 0;
+		for (const chunk of chunks) {
+			output.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return output;
+	}
+
+	private enqueuePtyOutput(instance: TerminalInstance, data: Uint8Array): void {
+		const { maxBytes, maxDelayMs } = this.ptyOutputBatchConfig;
+		if (maxBytes <= 0 && maxDelayMs <= 0) {
+			this.postToTerminal(instance.id, {
+				type: "pty-data",
+				terminalId: instance.id,
+				data,
+			});
+			return;
+		}
+		if (!instance.outputBuffer) {
+			instance.outputBuffer = { chunks: [], bytes: 0 };
+		}
+		const buffer = instance.outputBuffer;
+		buffer.chunks.push(data);
+		buffer.bytes += data.byteLength;
+
+		if (maxBytes > 0 && buffer.bytes >= maxBytes) {
+			this.flushPtyOutputBuffer(instance);
+			return;
+		}
+		if (maxDelayMs > 0) {
+			if (buffer.flushTimer) {
+				clearTimeout(buffer.flushTimer);
+			}
+			buffer.flushTimer = setTimeout(() => {
+				if (instance.outputBuffer) {
+					instance.outputBuffer.flushTimer = undefined;
+				}
+				this.flushPtyOutputBuffer(instance);
+			}, maxDelayMs);
+		} else if (!buffer.flushTimer) {
+			buffer.flushTimer = setTimeout(() => {
+				if (instance.outputBuffer) {
+					instance.outputBuffer.flushTimer = undefined;
+				}
+				this.flushPtyOutputBuffer(instance);
+			}, 0);
+		}
+	}
+
+	private flushPtyOutputBuffer(instance: TerminalInstance): void {
+		const buffer = instance.outputBuffer;
+		if (!buffer || buffer.bytes === 0) return;
+		if (buffer.flushTimer) {
+			clearTimeout(buffer.flushTimer);
+			buffer.flushTimer = undefined;
+		}
+		const payload = this.concatPtyChunks(buffer.chunks, buffer.bytes);
+		buffer.chunks = [];
+		buffer.bytes = 0;
+		if (!instance.ready) {
+			if (instance.dataQueue.length < MAX_DATA_QUEUE_SIZE) {
+				instance.dataQueue.push(payload);
+			}
+			return;
+		}
+		this.postToTerminal(instance.id, {
+			type: "pty-data",
+			terminalId: instance.id,
+			data: payload,
+		});
+	}
+
+	private flushQueuedPtyData(instance: TerminalInstance): void {
+		if (instance.dataQueue.length === 0) return;
+		const { maxBytes } = this.ptyOutputBatchConfig;
+		let pendingChunks: Uint8Array[] = [];
+		let pendingBytes = 0;
+		const flushPending = () => {
+			if (pendingBytes === 0) return;
+			const payload = this.concatPtyChunks(pendingChunks, pendingBytes);
+			this.postToTerminal(instance.id, {
+				type: "pty-data",
+				terminalId: instance.id,
+				data: payload,
+			});
+			pendingChunks = [];
+			pendingBytes = 0;
+		};
+		for (const chunk of instance.dataQueue) {
+			if (maxBytes > 0 && pendingBytes > 0) {
+				if (pendingBytes + chunk.byteLength > maxBytes) {
+					flushPending();
+				}
+			}
+			pendingChunks.push(chunk);
+			pendingBytes += chunk.byteLength;
+		}
+		flushPending();
+		instance.dataQueue = [];
+	}
+
+	private handlePtyData(id: TerminalId, data: string | Uint8Array): void {
 		const instance = this.terminals.get(id);
 		if (!instance) return;
 
-		// Check for OSC 7 CWD update
-		const cwd = this.parseOSC7(data);
-		if (cwd) {
-			instance.currentCwd = cwd;
-			// Notify webview of CWD change for relative path resolution
-			if (instance.ready) {
-				this.postToTerminal(id, {
-					type: "update-cwd",
-					terminalId: id,
-					cwd,
-				});
-			}
-		}
+		const payload = typeof data === "string" ? this.encodePtyData(data) : data;
+		const needsBenchmark =
+			this.benchmarkWatchers.has(id) || this.benchmarkCommandWatchers.has(id);
+		const needsOsc =
+			typeof data === "string"
+				? data.indexOf("\x1b]") !== -1
+				: this.hasOscSequence(data);
+		const decoded =
+			needsOsc || typeof data === "string"
+				? typeof data === "string"
+					? data
+					: this.decodePtyData(data)
+				: undefined;
 
-		// Check for OSC 9 notification
-		const notification = this.parseOSC9(data);
-		if (notification) {
-			this.handleOSC9Notification(notification);
+		if (decoded && decoded.indexOf("\x1b]") !== -1) {
+			// Check for OSC 7 CWD update
+			const cwd = this.parseOSC7(decoded);
+			if (cwd) {
+				instance.currentCwd = cwd;
+				// Notify webview of CWD change for relative path resolution
+				if (instance.ready) {
+					this.postToTerminal(id, {
+						type: "update-cwd",
+						terminalId: id,
+						cwd,
+					});
+				}
+			}
+
+			// Check for OSC 9 notification
+			const notification = this.parseOSC9(decoded);
+			if (notification) {
+				this.handleOSC9Notification(notification);
+			}
 		}
 
 		if (!instance.ready) {
 			// Buffer until ready, with cap to prevent memory bloat
 			if (instance.dataQueue.length < MAX_DATA_QUEUE_SIZE) {
-				instance.dataQueue.push(data);
+				instance.dataQueue.push(payload);
 			}
 			// Silently drop if over cap (better than OOM)
 		} else {
-			this.postToTerminal(id, {
-				type: "pty-data",
-				terminalId: id,
-				data,
-			});
+			this.enqueuePtyOutput(instance, payload);
+		}
+
+		if (needsBenchmark) {
+			this.handleBenchmarkOutput(id, data);
 		}
 	}
 
@@ -709,16 +2210,15 @@ export class TerminalManager implements vscode.Disposable {
 			type: "update-config",
 			config,
 		});
-
-		// Flush buffered data
-		for (const data of instance.dataQueue) {
+		if (this.profileSession && instance.location === "editor") {
 			this.postToTerminal(id, {
-				type: "pty-data",
-				terminalId: id,
-				data,
+				type: "profile-start",
+				sessionId: this.profileSession.sessionId,
 			});
 		}
-		instance.dataQueue = [];
+
+		// Flush buffered data (batch-aware)
+		this.flushQueuedPtyData(instance);
 	}
 
 	/** Handle renderer status message from webview */
@@ -765,6 +2265,228 @@ export class TerminalManager implements vscode.Disposable {
 				this.postToTerminal(id, message);
 			}
 		}
+	}
+
+	async toggleProfiling(): Promise<ProfilingStatus | null> {
+		if (this.profileSession) {
+			return await this.stopProfiling();
+		}
+		return await this.startProfiling();
+	}
+
+	private buildProfileFileName(sessionId: string): string {
+		return `${PROFILE_FILE_PREFIX}-${sessionId}${PROFILE_FILE_EXTENSION}`;
+	}
+
+	private resolveConfiguredProfilePath(
+		configuredPath: string | undefined,
+		sessionId: string,
+	): string | null {
+		if (!configuredPath) return null;
+		const trimmed = configuredPath.trim();
+		if (!trimmed) return null;
+
+		let expanded = trimmed;
+		if (expanded.startsWith("~")) {
+			expanded = path.join(os.homedir(), expanded.slice(1));
+		}
+
+		const baseDir = getWorkspaceCwd() ?? this.context.logUri.fsPath;
+		const resolved = path.isAbsolute(expanded)
+			? expanded
+			: path.resolve(baseDir, expanded);
+		const ext = path.extname(resolved);
+		if (!ext) {
+			return path.join(resolved, this.buildProfileFileName(sessionId));
+		}
+		return resolved;
+	}
+
+	private resolveProfileOutputPaths(sessionId: string): string[] {
+		const outputPaths = new Set<string>();
+		const defaultBase = this.context.logUri.fsPath;
+		outputPaths.add(
+			path.join(
+				defaultBase,
+				PROFILE_OUTPUT_SUBDIR,
+				this.buildProfileFileName(sessionId),
+			),
+		);
+
+		const config = vscode.workspace.getConfiguration("bootty");
+		const configuredPath = config.get<string>("profile.outputPath");
+		const resolvedConfigured = this.resolveConfiguredProfilePath(
+			configuredPath,
+			sessionId,
+		);
+		if (resolvedConfigured) {
+			outputPaths.add(resolvedConfigured);
+		}
+
+		return [...outputPaths];
+	}
+
+	private async startProfiling(): Promise<ProfilingStatus | null> {
+		if (this.profileSession) {
+			return {
+				active: true,
+				sessionId: this.profileSession.sessionId,
+				outputPaths: this.profileSession.outputPaths,
+			};
+		}
+
+		const sessionId = crypto.randomUUID();
+		const startedAt = Date.now();
+		const outputPaths = this.resolveProfileOutputPaths(sessionId);
+		if (outputPaths.length === 0) {
+			return null;
+		}
+
+		const writers = outputPaths.map(
+			(outputPath) => new ProfileWriter(outputPath),
+		);
+		const meta = {
+			sessionId,
+			startedAt,
+			vscodeVersion: vscode.version,
+			nodeVersion: process.version,
+			platform: os.platform(),
+			release: os.release(),
+			arch: os.arch(),
+		};
+
+		try {
+			await Promise.all(writers.map((writer) => writer.start(meta)));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			await Promise.allSettled(
+				writers.map((writer) =>
+					writer.stop({ sessionId, startedAt, error: message }),
+				),
+			);
+			this.outputChannel.appendLine(
+				`[bootty] Profiling start failed: ${message}`,
+			);
+			return null;
+		}
+
+		this.profileSession = { sessionId, startedAt, outputPaths, writers };
+		const config = vscode.workspace.getConfiguration("bootty");
+		const data: Record<string, string | number | boolean | null> = {};
+		const captureConfig = <T extends string | number | boolean>(
+			key: string,
+			value: T | undefined,
+		): void => {
+			const inspect = config.inspect<T>(key);
+			data[`${key}.value`] = value ?? null;
+			data[`${key}.default`] = inspect?.defaultValue ?? null;
+			data[`${key}.global`] = inspect?.globalValue ?? null;
+			data[`${key}.workspace`] = inspect?.workspaceValue ?? null;
+		};
+		captureConfig("renderer", config.get<RendererMode>("renderer"));
+		captureConfig(
+			"pty.maxLinesPerFrame",
+			config.get<number>("pty.maxLinesPerFrame"),
+		);
+		captureConfig("pty.maxFrameMs", config.get<number>("pty.maxFrameMs"));
+		captureConfig(
+			"pty.maxBytesPerFrame",
+			config.get<number>("pty.maxBytesPerFrame"),
+		);
+		captureConfig(
+			"pty.adaptiveDrain",
+			config.get<boolean>("pty.adaptiveDrain"),
+		);
+		captureConfig(
+			"pty.adaptiveFrameMs",
+			config.get<number>("pty.adaptiveFrameMs"),
+		);
+		captureConfig(
+			"pty.adaptiveQueueThreshold",
+			config.get<number>("pty.adaptiveQueueThreshold"),
+		);
+		captureConfig(
+			"pty.adaptiveMaxLinesPerFrame",
+			config.get<number>("pty.adaptiveMaxLinesPerFrame"),
+		);
+		captureConfig(
+			"pty.adaptiveMaxLinesPerFrameWebgl",
+			config.get<number>("pty.adaptiveMaxLinesPerFrameWebgl"),
+		);
+		captureConfig(
+			"pty.adaptiveAutoTune",
+			config.get<boolean>("pty.adaptiveAutoTune"),
+		);
+		captureConfig(
+			"pty.adaptiveQueueBytesThreshold",
+			config.get<number>("pty.adaptiveQueueBytesThreshold"),
+		);
+		captureConfig(
+			"pty.adaptiveQueueHysteresisRatio",
+			config.get<number>("pty.adaptiveQueueHysteresisRatio"),
+		);
+		captureConfig(
+			"pty.outputBatchMaxBytes",
+			config.get<number>("pty.outputBatchMaxBytes"),
+		);
+		captureConfig(
+			"pty.outputBatchMaxDelayMs",
+			config.get<number>("pty.outputBatchMaxDelayMs"),
+		);
+		const configEvent: ProfileEvent = {
+			name: "bootty:extension:runtime-config",
+			ts: Date.now(),
+			source: "panel",
+			data,
+		};
+		for (const writer of writers) {
+			writer.appendEvents(sessionId, [configEvent]);
+		}
+		this.panelProvider.postMessage({ type: "profile-start", sessionId });
+		this.broadcastToAll({ type: "profile-start", sessionId });
+
+		return { active: true, sessionId, outputPaths };
+	}
+
+	private async stopProfiling(): Promise<ProfilingStatus | null> {
+		const session = this.profileSession;
+		if (!session) {
+			return { active: false };
+		}
+
+		const { sessionId, outputPaths, writers, startedAt } = session;
+		this.panelProvider.postMessage({ type: "profile-stop", sessionId });
+		this.broadcastToAll({ type: "profile-stop", sessionId });
+
+		await new Promise((resolve) => setTimeout(resolve, PROFILE_STOP_GRACE_MS));
+
+		const stoppedAt = Date.now();
+		const meta = {
+			sessionId,
+			startedAt,
+			stoppedAt,
+			durationMs: stoppedAt - startedAt,
+		};
+
+		const results = await Promise.allSettled(
+			writers.map((writer) => writer.stop(meta)),
+		);
+		const failures = results.filter((result) => result.status === "rejected");
+		if (failures.length > 0) {
+			const first = failures[0];
+			const message =
+				first.status === "rejected"
+					? first.reason instanceof Error
+						? first.reason.message
+						: String(first.reason)
+					: "unknown";
+			this.outputChannel.appendLine(
+				`[bootty] Profiling stop failed: ${message}`,
+			);
+		}
+
+		this.profileSession = undefined;
+		return { active: false, sessionId, outputPaths };
 	}
 
 	private handleTerminalInput(id: TerminalId, data: string): void {
@@ -821,6 +2543,30 @@ export class TerminalManager implements vscode.Disposable {
 				console.error(`[bootty] Error opening URL: ${error}`);
 			},
 		);
+	}
+
+	private handleProfileData(sessionId: string, events: ProfileEvent[]): void {
+		if (!this.profileSession || this.profileSession.sessionId !== sessionId) {
+			return;
+		}
+		for (const writer of this.profileSession.writers) {
+			writer.appendEvents(sessionId, events);
+		}
+	}
+
+	private handleProfileError(sessionId: string, error: string): void {
+		if (!this.profileSession || this.profileSession.sessionId !== sessionId) {
+			return;
+		}
+		const event: ProfileEvent = {
+			name: "bootty:profile-error",
+			ts: Date.now(),
+			data: { error },
+			source: "panel",
+		};
+		for (const writer of this.profileSession.writers) {
+			writer.appendEvents(sessionId, [event]);
+		}
 	}
 
 	private async handleOpenFile(
@@ -920,6 +2666,27 @@ export class TerminalManager implements vscode.Disposable {
 
 		// Clean up renderer info for this terminal
 		this.rendererInfo.delete(id);
+		const benchmarkWatcher = this.benchmarkWatchers.get(id);
+		if (benchmarkWatcher) {
+			this.benchmarkWatchers.delete(id);
+			benchmarkWatcher.reject(
+				new Error(`Benchmark cancelled: terminal ${id} destroyed.`),
+			);
+		}
+		const commandWatcher = this.benchmarkCommandWatchers.get(id);
+		if (commandWatcher) {
+			this.benchmarkCommandWatchers.delete(id);
+			commandWatcher.reject(
+				new Error(`Benchmark command cancelled: terminal ${id} destroyed.`),
+			);
+		}
+		const drainWatcher = this.benchmarkDrainWatchers.get(id);
+		if (drainWatcher) {
+			this.benchmarkDrainWatchers.delete(id);
+			drainWatcher.reject(
+				new Error(`Benchmark drain cancelled: terminal ${id} destroyed.`),
+			);
+		}
 
 		// Release index for reuse
 		this.releaseIndex(instance.index);
@@ -973,6 +2740,11 @@ export class TerminalManager implements vscode.Disposable {
 			clearTimeout(instance.readyTimeout);
 			instance.readyTimeout = undefined;
 		}
+		if (instance.outputBuffer?.flushTimer) {
+			clearTimeout(instance.outputBuffer.flushTimer);
+			instance.outputBuffer.flushTimer = undefined;
+		}
+		instance.outputBuffer = undefined;
 
 		// Kill PTY process (safe to call if already dead)
 		this.ptyService.kill(id);
@@ -1685,6 +3457,12 @@ export class TerminalManager implements vscode.Disposable {
 			type: "update-config",
 			config,
 		});
+		if (this.profileSession) {
+			this.panelProvider.postMessage({
+				type: "profile-start",
+				sessionId: this.profileSession.sessionId,
+			});
+		}
 
 		// Recreate terminals from persisted state (add-tab includes groupId)
 		const savedActiveId = this.activeTerminalId;
@@ -1789,6 +3567,15 @@ export class TerminalManager implements vscode.Disposable {
 	dispose(): void {
 		// Save state before disposing
 		this.savePersistedState();
+
+		if (this.profileSession) {
+			void this.stopProfiling().catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				this.outputChannel.appendLine(
+					`[bootty] Profiling stop failed during dispose: ${message}`,
+				);
+			});
+		}
 
 		for (const [id, instance] of this.terminals) {
 			if (instance.readyTimeout) {

@@ -1,11 +1,13 @@
 # SPEC: Custom Terminal Themes (#4)
 
 ## Goal
+
 Support VS Code's terminal color theming so BooTTY matches the user's active color theme.
 
 ## Theme Source
 
 Read terminal colors from VS Code's workbench theme system:
+
 - `terminal.foreground`
 - `terminal.background`
 - `terminal.cursor.foreground`
@@ -21,43 +23,44 @@ Read terminal colors from VS Code's workbench theme system:
 
 ```typescript
 // theme.ts
-import * as vscode from 'vscode';
-import type { ITheme } from 'ghostty-web';
+import * as vscode from "vscode";
+import type { ITheme } from "ghostty-web";
 
 function getThemeColor(key: string): string | undefined {
   // VS Code doesn't directly expose terminal colors via API
   // We need to use workbench.colorCustomizations or compute from theme
-  const colorCustomizations = vscode.workspace
-    .getConfiguration('workbench')
-    .get<Record<string, string>>('colorCustomizations') ?? {};
+  const colorCustomizations =
+    vscode.workspace
+      .getConfiguration("workbench")
+      .get<Record<string, string>>("colorCustomizations") ?? {};
 
   return colorCustomizations[key];
 }
 
 export function resolveTerminalTheme(): ITheme {
   return {
-    foreground: getThemeColor('terminal.foreground'),
-    background: getThemeColor('terminal.background'),
-    cursor: getThemeColor('terminal.cursor.foreground'),
-    cursorAccent: getThemeColor('terminal.cursor.background'),
-    selectionBackground: getThemeColor('terminal.selectionBackground'),
-    selectionForeground: getThemeColor('terminal.selectionForeground'),
-    black: getThemeColor('terminal.ansiBlack'),
-    red: getThemeColor('terminal.ansiRed'),
-    green: getThemeColor('terminal.ansiGreen'),
-    yellow: getThemeColor('terminal.ansiYellow'),
-    blue: getThemeColor('terminal.ansiBlue'),
-    magenta: getThemeColor('terminal.ansiMagenta'),
-    cyan: getThemeColor('terminal.ansiCyan'),
-    white: getThemeColor('terminal.ansiWhite'),
-    brightBlack: getThemeColor('terminal.ansiBrightBlack'),
-    brightRed: getThemeColor('terminal.ansiBrightRed'),
-    brightGreen: getThemeColor('terminal.ansiBrightGreen'),
-    brightYellow: getThemeColor('terminal.ansiBrightYellow'),
-    brightBlue: getThemeColor('terminal.ansiBrightBlue'),
-    brightMagenta: getThemeColor('terminal.ansiBrightMagenta'),
-    brightCyan: getThemeColor('terminal.ansiBrightCyan'),
-    brightWhite: getThemeColor('terminal.ansiBrightWhite'),
+    foreground: getThemeColor("terminal.foreground"),
+    background: getThemeColor("terminal.background"),
+    cursor: getThemeColor("terminal.cursor.foreground"),
+    cursorAccent: getThemeColor("terminal.cursor.background"),
+    selectionBackground: getThemeColor("terminal.selectionBackground"),
+    selectionForeground: getThemeColor("terminal.selectionForeground"),
+    black: getThemeColor("terminal.ansiBlack"),
+    red: getThemeColor("terminal.ansiRed"),
+    green: getThemeColor("terminal.ansiGreen"),
+    yellow: getThemeColor("terminal.ansiYellow"),
+    blue: getThemeColor("terminal.ansiBlue"),
+    magenta: getThemeColor("terminal.ansiMagenta"),
+    cyan: getThemeColor("terminal.ansiCyan"),
+    white: getThemeColor("terminal.ansiWhite"),
+    brightBlack: getThemeColor("terminal.ansiBrightBlack"),
+    brightRed: getThemeColor("terminal.ansiBrightRed"),
+    brightGreen: getThemeColor("terminal.ansiBrightGreen"),
+    brightYellow: getThemeColor("terminal.ansiBrightYellow"),
+    brightBlue: getThemeColor("terminal.ansiBrightBlue"),
+    brightMagenta: getThemeColor("terminal.ansiBrightMagenta"),
+    brightCyan: getThemeColor("terminal.ansiBrightCyan"),
+    brightWhite: getThemeColor("terminal.ansiBrightWhite"),
   };
 }
 ```
@@ -65,18 +68,20 @@ export function resolveTerminalTheme(): ITheme {
 ### Message Protocol
 
 Add to `types/messages.ts`:
+
 ```typescript
 export type ExtensionMessage =
-  | { type: 'pty-data'; terminalId: TerminalId; data: string }
-  | { type: 'pty-exit'; terminalId: TerminalId; exitCode: number }
-  | { type: 'resize'; cols: number; rows: number }
-  | { type: 'update-settings'; settings: { fontFamily?: string; fontSize?: number } }
-  | { type: 'update-theme'; theme: ITheme };
+  | { type: "pty-data"; terminalId: TerminalId; data: string }
+  | { type: "pty-exit"; terminalId: TerminalId; exitCode: number }
+  | { type: "resize"; cols: number; rows: number }
+  | { type: "update-settings"; settings: { fontFamily?: string; fontSize?: number } }
+  | { type: "update-theme"; theme: ITheme };
 ```
 
 ### Webview Handler
 
 In `webview/main.ts`:
+
 ```typescript
 case 'update-theme':
   // Note: ghostty-web's handleOptionChange warns that theme changes
@@ -89,6 +94,7 @@ case 'update-theme':
 ### Hot Reload on Theme Change
 
 In `terminal-manager.ts`:
+
 ```typescript
 constructor(context: vscode.ExtensionContext) {
   // ... existing code ...
@@ -126,6 +132,7 @@ private broadcastThemeUpdate(): void {
 ### Initial Theme Injection
 
 Pass theme when creating terminal:
+
 ```typescript
 const theme = resolveTerminalTheme();
 const termOptions = {
@@ -141,17 +148,20 @@ const termOptions = {
 ### Theme Hot Reload Scope
 
 **What hot reload DOES affect:**
+
 - Selection colors (selectionBackground, selectionForeground)
 - Terminal background color
 - Cursor color
 - New content written after theme change
 
 **What hot reload does NOT affect:**
+
 - Existing cell content (text already on screen keeps original colors)
 
 This is a fundamental terminal emulator limitation: cells store final RGB values at write time, not palette indices. The WASM terminal resolves colors when content is written. There's no standard mechanism to "re-color" existing content.
 
 **Workarounds for users:**
+
 - Run `clear` to clear the screen after theme change
 - New output will use the new theme colors
 - Scrollback content retains original colors
@@ -173,8 +183,8 @@ VS Code doesn't directly expose computed theme colors via extension API. Options
 function getVSCodeThemeColors(): ITheme {
   const style = getComputedStyle(document.documentElement);
   return {
-    foreground: style.getPropertyValue('--vscode-terminal-foreground').trim() || undefined,
-    background: style.getPropertyValue('--vscode-terminal-background').trim() || undefined,
+    foreground: style.getPropertyValue("--vscode-terminal-foreground").trim() || undefined,
+    background: style.getPropertyValue("--vscode-terminal-background").trim() || undefined,
     // ... etc
   };
 }
@@ -184,7 +194,7 @@ const observer = new MutationObserver(() => {
   const theme = getVSCodeThemeColors();
   term.options.theme = theme;
 });
-observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
 ```
 
 ## Data Flow
