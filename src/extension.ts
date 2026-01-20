@@ -361,6 +361,12 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			return manager.getTerminalIds();
 		}),
+		vscode.commands.registerCommand("bootty.test.getEditorTerminalIds", () => {
+			if (!manager) {
+				throw new Error("BooTTY: Terminal manager not initialized.");
+			}
+			return manager.getEditorTerminalIds();
+		}),
 	);
 }
 

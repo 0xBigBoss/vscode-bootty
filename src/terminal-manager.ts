@@ -3938,6 +3938,17 @@ export class TerminalManager implements vscode.Disposable {
 		});
 	}
 
+	/** Get terminal IDs for editor terminals */
+	getEditorTerminalIds(): TerminalId[] {
+		const ids: TerminalId[] = [];
+		for (const [id, instance] of this.terminals) {
+			if (instance.location === "editor") {
+				ids.push(id);
+			}
+		}
+		return ids;
+	}
+
 	/** Get the active terminal ID */
 	getActiveTerminalId(): TerminalId | undefined {
 		return this.activeTerminalId ?? undefined;

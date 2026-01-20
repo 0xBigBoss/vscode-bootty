@@ -37,6 +37,13 @@ async function getPanelTerminalIds() {
   return Array.isArray(ids) ? ids : [];
 }
 
+async function getEditorTerminalIds() {
+  const ids = await vscode.commands.executeCommand(
+    "bootty.test.getEditorTerminalIds",
+  );
+  return Array.isArray(ids) ? ids : [];
+}
+
 async function waitForNewPanelTerminal(existingIds, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   const existing = new Set(existingIds);
@@ -47,6 +54,18 @@ async function waitForNewPanelTerminal(existingIds, timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
   }
   throw new Error("Timed out waiting for a new panel terminal");
+}
+
+async function waitForNewEditorTerminal(existingIds, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const existing = new Set(existingIds);
+  while (Date.now() < deadline) {
+    const ids = await getEditorTerminalIds();
+    const next = ids.find((id) => !existing.has(id));
+    if (next) return next;
+    await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
+  }
+  throw new Error("Timed out waiting for a new editor terminal");
 }
 
 async function waitForTextInAnyTerminal({ terminalIds, text, timeoutMs }) {
@@ -676,6 +695,44 @@ async function run() {
     },
   );
   assert.equal(editorSearchHiddenState?.visible, false);
+
+  const defaultLocationConfig =
+    vscode.workspace.getConfiguration("bootty");
+  const previousDefaultLocation = defaultLocationConfig.get(
+    "defaultTerminalLocation",
+    "panel",
+  );
+  const editorIdsBeforeDefault = await getEditorTerminalIds();
+  await defaultLocationConfig.update(
+    "defaultTerminalLocation",
+    "editor",
+    vscode.ConfigurationTarget.Workspace,
+  );
+  await vscode.commands.executeCommand("bootty.newTerminal");
+  const defaultEditorId = await waitForNewEditorTerminal(
+    editorIdsBeforeDefault,
+    READY_TIMEOUT_MS,
+  );
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: defaultEditorId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  const defaultEditorLabel = "BOOTTY_DEFAULT_EDITOR_READY";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: defaultEditorId,
+    data: `printf '${defaultEditorLabel}\\n'\n`,
+  });
+  await waitForText({
+    terminalId: defaultEditorId,
+    text: defaultEditorLabel,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+  await defaultLocationConfig.update(
+    "defaultTerminalLocation",
+    previousDefaultLocation,
+    vscode.ConfigurationTarget.Workspace,
+  );
 
   const result = await vscode.commands.executeCommand("bootty.runBenchmark", {
     scenario: "ptySmall",
