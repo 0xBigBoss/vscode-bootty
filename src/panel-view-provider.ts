@@ -131,7 +131,9 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 
 	/** Post a message to the panel webview */
 	postMessage(message: PanelExtensionMessage): void {
-		if (this._isReady && this._view?.visible) {
+		const isTestMessage =
+			typeof message.type === "string" && message.type.startsWith("test-");
+		if (this._isReady && this._view && (this._view.visible || isTestMessage)) {
 			this._view.webview.postMessage(message);
 		} else {
 			this._messageQueue.push(message);

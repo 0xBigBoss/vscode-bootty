@@ -48,6 +48,7 @@ import type {
 import type { TerminalId } from "../types/terminal";
 import { ContextMenu } from "./context-menu";
 import { createProfileCollector } from "./profile-collector";
+import type { RendererResult } from "./renderer-utils";
 import { createRenderer } from "./renderer-utils";
 import {
 	createSearchController,
@@ -83,6 +84,10 @@ interface PanelTerminal {
 	themeObserver: MutationObserver;
 	resizeObserver: ResizeObserver;
 }
+
+// Pre-compiled file path pattern for testing (matches file-link provider behavior)
+const FILE_PATH_PATTERN_GLOBAL =
+	/(?:^|[\s'"(])((?:[a-zA-Z]:)?(?:\.{0,2}[\\/])?[\w.\\/-]+\.[a-zA-Z0-9]+)(?:[:(](\d+)(?:[,:](\d+))?[\])]?)?/g;
 
 // Wrap in async IIFE for top-level await
 const boottyPanelInit = async (): Promise<void> => {
@@ -1107,35 +1112,50 @@ const boottyPanelInit = async (): Promise<void> => {
 		terminalsContainer.appendChild(wrapper);
 
 		// Create renderer based on current runtime config (reflects latest setting value)
-		const rendererResult = createRenderer(
-			runtimeConfig.renderer,
-			() =>
-				new WebGLRenderer({
-					onContextLoss: () => {
-						// WebGL context lost after repeated failures - renderer is degraded
-						// Note: The terminal still uses the WebGL renderer (no runtime swap),
-						// but it's no longer rendering. Report accurate status.
-						console.warn(
-							`[bootty] WebGL context lost for terminal ${id} - renderer degraded`,
-						);
-						const existingInfo = rendererInfo.get(id);
-						rendererInfo.set(id, {
-							type: existingInfo?.type ?? "webgl", // Keep actual type
-							status: "degraded",
-							fallback: existingInfo?.fallback ?? false,
-							reason: "WebGL context lost after repeated failures",
-						});
-						vscode.postMessage({
-							type: "renderer-status",
-							terminalId: id,
-							renderer: existingInfo?.type ?? ("webgl" as RendererType),
-							status: "degraded",
-							fallback: existingInfo?.fallback ?? false,
-							reason: "WebGL context lost after repeated failures",
-						});
-					},
-				}),
-		);
+		let rendererResult: RendererResult;
+		try {
+			rendererResult = createRenderer(
+				runtimeConfig.renderer,
+				() =>
+					new WebGLRenderer({
+						onContextLoss: () => {
+							// WebGL context lost after repeated failures - renderer is degraded
+							// Note: The terminal still uses the WebGL renderer (no runtime swap),
+							// but it's no longer rendering. Report accurate status.
+							console.warn(
+								`[bootty] WebGL context lost for terminal ${id} - renderer degraded`,
+							);
+							const existingInfo = rendererInfo.get(id);
+							rendererInfo.set(id, {
+								type: existingInfo?.type ?? "webgl", // Keep actual type
+								status: "degraded",
+								fallback: existingInfo?.fallback ?? false,
+								reason: "WebGL context lost after repeated failures",
+							});
+							vscode.postMessage({
+								type: "renderer-status",
+								terminalId: id,
+								renderer: existingInfo?.type ?? ("webgl" as RendererType),
+								status: "degraded",
+								fallback: existingInfo?.fallback ?? false,
+								reason: "WebGL context lost after repeated failures",
+							});
+						},
+					}),
+			);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			console.warn(
+				`[bootty] WebGL renderer init failed for terminal ${id}:`,
+				message,
+			);
+			rendererResult = {
+				renderer: undefined,
+				type: "canvas",
+				fallback: true,
+				reason: `WebGL renderer init failed: ${message}`,
+			};
+		}
 
 		// Track renderer info for this terminal
 		rendererInfo.set(id, {
@@ -1343,7 +1363,6 @@ const boottyPanelInit = async (): Promise<void> => {
 			// Let ghostty-web handle: normal screen scrolling OR alt-screen arrow-key fallback
 			return false;
 		});
-
 		// Send input to PTY
 		term.onData((data: string) => {
 			vscode.postMessage({
@@ -1476,6 +1495,42 @@ const boottyPanelInit = async (): Promise<void> => {
 		terminals.set(id, panelTerminal);
 
 		return panelTerminal;
+	}
+
+	async function findFileLinksForTerminal(
+		terminalId: TerminalId,
+		text: string,
+		limit: number | undefined,
+	): Promise<number> {
+		const terminal = terminals.get(terminalId);
+		if (!terminal) {
+			return 0;
+		}
+		const buffer = (terminal.term as unknown as { buffer?: any }).buffer;
+		if (!buffer?.active) {
+			return 0;
+		}
+		const length = buffer.active.length ?? 0;
+		const maxLines =
+			typeof limit === "number" && Number.isFinite(limit)
+				? Math.max(1, Math.floor(limit))
+				: length;
+		const start = Math.max(0, length - maxLines);
+		let totalMatches = 0;
+		for (let y = start; y < length; y += 1) {
+			const line = buffer.active.getLine(y);
+			if (!line) continue;
+			const lineText = line.translateToString(true);
+			if (!lineText.includes(text)) continue;
+			FILE_PATH_PATTERN_GLOBAL.lastIndex = 0;
+			let match: RegExpExecArray | null;
+			while ((match = FILE_PATH_PATTERN_GLOBAL.exec(lineText)) !== null) {
+				if (match[1]) {
+					totalMatches += 1;
+				}
+			}
+		}
+		return totalMatches;
 	}
 
 	/** Get the group ID for a terminal, if it's in a group */
@@ -1699,7 +1754,7 @@ const boottyPanelInit = async (): Promise<void> => {
 	});
 
 	// Handle messages from extension
-	window.addEventListener("message", (e) => {
+	window.addEventListener("message", async (e) => {
 		const msg = e.data as PanelExtensionMessage;
 
 		switch (msg.type) {
@@ -1727,33 +1782,33 @@ const boottyPanelInit = async (): Promise<void> => {
 				// Send terminal-ready and renderer-status
 				requestAnimationFrame(() => {
 					requestAnimationFrame(() => {
+						const term = terminal.term as unknown as {
+							cols: number;
+							rows: number;
+						};
 						try {
 							// biome-ignore lint/suspicious/noFocusedTests: This is xterm FitAddon.fit(), not a test
 							(terminal.fitAddon as unknown as { fit: () => void }).fit();
-							const term = terminal.term as unknown as {
-								cols: number;
-								rows: number;
-							};
-							vscode.postMessage({
-								type: "terminal-ready",
-								terminalId: msg.terminalId,
-								cols: term.cols,
-								rows: term.rows,
-							});
-							// Report renderer status
-							const info = rendererInfo.get(msg.terminalId);
-							if (info) {
-								vscode.postMessage({
-									type: "renderer-status",
-									terminalId: msg.terminalId,
-									renderer: info.type,
-									status: info.status,
-									fallback: info.fallback,
-									reason: info.reason,
-								});
-							}
 						} catch (err) {
 							console.warn("[bootty] Fit error:", err);
+						}
+						vscode.postMessage({
+							type: "terminal-ready",
+							terminalId: msg.terminalId,
+							cols: term.cols,
+							rows: term.rows,
+						});
+						// Report renderer status
+						const info = rendererInfo.get(msg.terminalId);
+						if (info) {
+							vscode.postMessage({
+								type: "renderer-status",
+								terminalId: msg.terminalId,
+								renderer: info.type,
+								status: info.status,
+								fallback: info.fallback,
+								reason: info.reason,
+							});
 						}
 					});
 				});
@@ -1877,6 +1932,51 @@ const boottyPanelInit = async (): Promise<void> => {
 				break;
 			}
 
+			case "test-find-text": {
+				const terminal = terminals.get(msg.terminalId);
+				let found = false;
+				if (terminal) {
+					const buffer = (terminal.term as unknown as { buffer?: any }).buffer;
+					if (buffer?.active) {
+						const length = buffer.active.length ?? 0;
+						const limit =
+							typeof msg.limit === "number" && Number.isFinite(msg.limit)
+								? Math.max(1, Math.floor(msg.limit))
+								: length;
+						const start = Math.max(0, length - limit);
+						for (let y = start; y < length; y += 1) {
+							const line = buffer.active.getLine(y);
+							const lineText = line?.translateToString(true);
+							if (lineText?.includes(msg.text)) {
+								found = true;
+								break;
+							}
+						}
+					}
+				}
+				vscode.postMessage({
+					type: "test-find-text-result",
+					terminalId: msg.terminalId,
+					token: msg.token,
+					found,
+				});
+				break;
+			}
+			case "test-file-links": {
+				const matches = await findFileLinksForTerminal(
+					msg.terminalId,
+					msg.text,
+					msg.limit,
+				);
+				vscode.postMessage({
+					type: "test-file-links-result",
+					terminalId: msg.terminalId,
+					token: msg.token,
+					matches,
+				});
+				break;
+			}
+
 			case "pty-data": {
 				const terminal = terminals.get(msg.terminalId);
 				if (terminal) {
@@ -1961,14 +2061,18 @@ const boottyPanelInit = async (): Promise<void> => {
 					if (msg.settings.fontSize !== undefined) {
 						term.options.fontSize = msg.settings.fontSize;
 					}
-					// biome-ignore lint/suspicious/noFocusedTests: This is xterm FitAddon.fit(), not a test
-					(terminal.fitAddon as unknown as { fit: () => void }).fit();
-					vscode.postMessage({
-						type: "terminal-resize",
-						terminalId: msg.terminalId,
-						cols: term.cols,
-						rows: term.rows,
-					});
+					try {
+						// biome-ignore lint/suspicious/noFocusedTests: This is xterm FitAddon.fit(), not a test
+						(terminal.fitAddon as unknown as { fit: () => void }).fit();
+						vscode.postMessage({
+							type: "terminal-resize",
+							terminalId: msg.terminalId,
+							cols: term.cols,
+							rows: term.rows,
+						});
+					} catch (err) {
+						console.warn("[bootty] Fit error:", err);
+					}
 				}
 				break;
 			}

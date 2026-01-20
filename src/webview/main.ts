@@ -44,6 +44,7 @@ import {
 	FILE_PATH_PATTERN_SINGLE,
 } from "./file-link-provider";
 import { createProfileCollector } from "./profile-collector";
+import type { RendererResult } from "./renderer-utils";
 import { createRenderer } from "./renderer-utils";
 import { createSearchController } from "./search-controller";
 import { createThemeObserver, getVSCodeThemeColors } from "./theme-utils";
@@ -261,29 +262,71 @@ const boottyInit = async (): Promise<void> => {
 		});
 	}
 
+	async function findFileLinksForText(
+		text: string,
+		limit: number | undefined,
+	): Promise<number> {
+		const buffer = (term as unknown as { buffer?: any }).buffer;
+		if (!buffer?.active) {
+			return 0;
+		}
+		const length = buffer.active.length ?? 0;
+		const maxLines =
+			typeof limit === "number" && Number.isFinite(limit)
+				? Math.max(1, Math.floor(limit))
+				: length;
+		const start = Math.max(0, length - maxLines);
+		let matches = 0;
+		for (let y = start; y < length; y += 1) {
+			const line = buffer.active.getLine(y);
+			if (!line) continue;
+			const lineText = line.translateToString(true);
+			if (!lineText.includes(text)) continue;
+			const links = await new Promise<unknown[]>((resolve) => {
+				filePathLinkProvider.provideLinks(y, (value) =>
+					resolve(value ? (value as unknown[]) : []),
+				);
+			});
+			matches += links.length;
+		}
+		return matches;
+	}
+
 	// Create renderer based on mode
-	const rendererResult = createRenderer(
-		RENDERER_MODE,
-		() =>
-			new WebGLRenderer({
-				onContextLoss: () => {
-					// WebGL context lost after repeated failures - renderer is degraded
-					// Note: The terminal still uses the WebGL renderer (no runtime swap),
-					// but it's no longer rendering. Report accurate status.
-					console.warn("[bootty] WebGL context lost - renderer degraded");
-					currentRendererStatus = "degraded";
-					rendererReason = "WebGL context lost after repeated failures";
-					vscode.postMessage({
-						type: "renderer-status",
-						terminalId: TERMINAL_ID,
-						renderer: currentRendererType, // Still "webgl" - no actual swap
-						status: "degraded",
-						fallback: rendererFallback,
-						reason: "WebGL context lost after repeated failures",
-					});
-				},
-			}),
-	);
+	let rendererResult: RendererResult;
+	try {
+		rendererResult = createRenderer(
+			RENDERER_MODE,
+			() =>
+				new WebGLRenderer({
+					onContextLoss: () => {
+						// WebGL context lost after repeated failures - renderer is degraded
+						// Note: The terminal still uses the WebGL renderer (no runtime swap),
+						// but it's no longer rendering. Report accurate status.
+						console.warn("[bootty] WebGL context lost - renderer degraded");
+						currentRendererStatus = "degraded";
+						rendererReason = "WebGL context lost after repeated failures";
+						vscode.postMessage({
+							type: "renderer-status",
+							terminalId: TERMINAL_ID,
+							renderer: currentRendererType, // Still "webgl" - no actual swap
+							status: "degraded",
+							fallback: rendererFallback,
+							reason: "WebGL context lost after repeated failures",
+						});
+					},
+				}),
+		);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		console.warn("[bootty] WebGL renderer init failed:", message);
+		rendererResult = {
+			renderer: undefined,
+			type: "canvas",
+			fallback: true,
+			reason: `WebGL renderer init failed: ${message}`,
+		};
+	}
 
 	currentRendererType = rendererResult.type;
 	rendererFallback = rendererResult.fallback;
@@ -345,6 +388,15 @@ const boottyInit = async (): Promise<void> => {
 	const fitAddon = new FitAddon();
 	term.loadAddon(fitAddon);
 	term.open(document.getElementById("terminal-container")!);
+	const safeFit = (): boolean => {
+		try {
+			fitAddon.fit();
+			return true;
+		} catch (err) {
+			console.warn("[bootty] Fit error:", err);
+			return false;
+		}
+	};
 	let hasScrollListener = false;
 	const scrollDisposable = (
 		term as {
@@ -363,9 +415,9 @@ const boottyInit = async (): Promise<void> => {
 	// VS Code webviews may not have final dimensions until after paint
 	requestAnimationFrame(() => {
 		requestAnimationFrame(() => {
-			fitAddon.fit();
+			safeFit();
 			// Backup fit after 100ms in case webview layout isn't fully settled
-			setTimeout(() => fitAddon.fit(), 100);
+			setTimeout(() => safeFit(), 100);
 		});
 	});
 
@@ -963,9 +1015,46 @@ const boottyInit = async (): Promise<void> => {
 		});
 	}
 
-	window.addEventListener("message", (e) => {
+	window.addEventListener("message", async (e) => {
 		const msg = e.data as ExtensionMessage;
 		switch (msg.type) {
+			case "test-find-text": {
+				const buffer = (term as unknown as { buffer?: any }).buffer;
+				let found = false;
+				if (buffer?.active) {
+					const length = buffer.active.length ?? 0;
+					const limit =
+						typeof msg.limit === "number" && Number.isFinite(msg.limit)
+							? Math.max(1, Math.floor(msg.limit))
+							: length;
+					const start = Math.max(0, length - limit);
+					for (let y = start; y < length; y += 1) {
+						const line = buffer.active.getLine(y);
+						const lineText = line?.translateToString(true);
+						if (lineText?.includes(msg.text)) {
+							found = true;
+							break;
+						}
+					}
+				}
+				vscode.postMessage({
+					type: "test-find-text-result",
+					terminalId: TERMINAL_ID,
+					token: msg.token,
+					found,
+				});
+				break;
+			}
+			case "test-file-links": {
+				const matches = await findFileLinksForText(msg.text, msg.limit);
+				vscode.postMessage({
+					type: "test-file-links-result",
+					terminalId: TERMINAL_ID,
+					token: msg.token,
+					matches,
+				});
+				break;
+			}
 			case "pty-data": {
 				if (msg.data.byteLength > 0) {
 					pendingPtyMerge.push(msg.data);
@@ -1041,13 +1130,14 @@ const boottyInit = async (): Promise<void> => {
 					term.options.fontSize = msg.settings.fontSize;
 				}
 				// Recalculate dimensions after font change and notify PTY
-				fitAddon.fit();
-				vscode.postMessage({
-					type: "terminal-resize",
-					terminalId: TERMINAL_ID,
-					cols: term.cols,
-					rows: term.rows,
-				});
+				if (safeFit()) {
+					vscode.postMessage({
+						type: "terminal-resize",
+						terminalId: TERMINAL_ID,
+						cols: term.cols,
+						rows: term.rows,
+					});
+				}
 				break;
 			case "update-theme": {
 				// Hot reload theme colors from extension (colorCustomizations overrides)

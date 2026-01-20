@@ -300,6 +300,49 @@ export function activate(context: vscode.ExtensionContext) {
 				return await manager.runBenchmark(options);
 			},
 		),
+		// Internal: wait for panel + terminal handshake (used by e2e harness)
+		vscode.commands.registerCommand(
+			"bootty.test.waitForHandshake",
+			async (options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				return await manager.waitForHandshake(options);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.test.findText",
+			async (options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				return await manager.findText(options);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.test.sendInput",
+			(options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				manager.sendTestInput(options);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.test.findFileLinks",
+			async (options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				return await manager.findFileLinks(options);
+			},
+		),
+		vscode.commands.registerCommand("bootty.test.getPanelTerminalIds", () => {
+			if (!manager) {
+				throw new Error("BooTTY: Terminal manager not initialized.");
+			}
+			return manager.getTerminalIds();
+		}),
 	);
 }
 

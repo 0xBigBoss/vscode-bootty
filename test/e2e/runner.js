@@ -1,15 +1,301 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const vscode = require("vscode");
 
+const READY_TIMEOUT_MS = Number.parseInt(
+  process.env.BOOTTY_E2E_READY_TIMEOUT_MS ?? "20000",
+  10,
+);
+
+const FIND_TEXT_POLL_MS = 200;
+const FIND_TEXT_LIMIT = 400;
+
+async function waitForText({ terminalId, text, timeoutMs }) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = await vscode.commands.executeCommand("bootty.test.findText", {
+      terminalId,
+      text,
+      limit: FIND_TEXT_LIMIT,
+      timeoutMs: 2000,
+    });
+    if (found) return;
+    await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
+  }
+  throw new Error(`Timed out waiting for text: ${text}`);
+}
+
+async function getPanelTerminalIds() {
+  const ids = await vscode.commands.executeCommand(
+    "bootty.test.getPanelTerminalIds",
+  );
+  return Array.isArray(ids) ? ids : [];
+}
+
+async function waitForNewPanelTerminal(existingIds, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const existing = new Set(existingIds);
+  while (Date.now() < deadline) {
+    const ids = await getPanelTerminalIds();
+    const next = ids.find((id) => !existing.has(id));
+    if (next) return next;
+    await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
+  }
+  throw new Error("Timed out waiting for a new panel terminal");
+}
+
+function buildColorCommand(label, doneLabel) {
+  return `printf '\\x1b[31m${label}\\x1b[0m\\n${doneLabel}\\n'`;
+}
+
+function buildBurstColorCommand(label, count, doneLabel, colorCode = "32") {
+  return [
+    "i=1;",
+    `while [ $i -le ${count} ]; do`,
+    `printf '\\x1b[${colorCode}m${label}-%03d\\x1b[0m\\n' "$i";`,
+    "i=$((i+1));",
+    "done;",
+    `printf '${doneLabel}\\n'`,
+  ].join(" ");
+}
+
+function buildEnvCommand(label, envName) {
+  return `printf '${label}=%s\\n' "$${envName}"`;
+}
+
+function ensureTestFile(workspacePath) {
+  const filePath = path.join(workspacePath, "bootty-link-test.txt");
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+  fs.writeFileSync(filePath, "line1\nline2\nline3\n", "utf8");
+  return filePath;
+}
+
 async function run() {
-  await vscode.commands.executeCommand("bootty.togglePanel");
+  let linkFilePath = null;
+  try {
+    const forcedRenderer = process.env.BOOTTY_E2E_RENDERER;
+    if (forcedRenderer) {
+      if (!["auto", "canvas", "webgl"].includes(forcedRenderer)) {
+        throw new Error(
+          `Unsupported BOOTTY_E2E_RENDERER value: ${forcedRenderer}`,
+        );
+      }
+      await vscode.workspace
+        .getConfiguration("bootty")
+        .update("renderer", forcedRenderer, vscode.ConfigurationTarget.Workspace);
+    }
+
+    await vscode.commands.executeCommand("bootty.togglePanel");
+
+    const handshake = await vscode.commands.executeCommand(
+      "bootty.test.waitForHandshake",
+      {
+        timeoutMs: READY_TIMEOUT_MS,
+        panelTimeoutMs: READY_TIMEOUT_MS,
+      },
+    );
+
+    assert.ok(handshake, "Handshake result missing");
+    assert.equal(handshake.panelReady, true, "Panel did not become ready");
+    assert.equal(
+      handshake.terminalReady,
+      true,
+      "Terminal did not become ready",
+    );
+    assert.equal(
+      handshake.location,
+      "panel",
+      "Handshake terminal is not in panel",
+    );
+
+    const panelTerminalId = handshake.terminalId;
+    const panelText = "BOOTTY_COLOR_TEST_PANEL";
+    const panelDone = "BOOTTY_COLOR_DONE_PANEL";
+    const panelCommand = buildColorCommand(panelText, panelDone);
+    await vscode.commands.executeCommand("bootty.test.sendInput", {
+      terminalId: panelTerminalId,
+      data: `${panelCommand}\n`,
+    });
+    await waitForText({
+      terminalId: panelTerminalId,
+      text: panelText,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+    await waitForText({
+      terminalId: panelTerminalId,
+      text: panelDone,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    assert.ok(workspacePath, "Workspace path missing");
+    const encodedCwd = encodeURI(workspacePath);
+    linkFilePath = ensureTestFile(workspacePath);
+    const panelLinkLabel = "BOOTTY_PANEL_LINK_PATH";
+    const panelLinkDone = "BOOTTY_PANEL_LINK_DONE";
+    await vscode.commands.executeCommand("bootty.test.sendInput", {
+      terminalId: panelTerminalId,
+      data: `printf '\\x1b]7;file://localhost${encodedCwd}\\x07'\n`,
+    });
+    await vscode.commands.executeCommand("bootty.test.sendInput", {
+      terminalId: panelTerminalId,
+      data: `printf '${panelLinkLabel} bootty-link-test.txt:2:1\\n${panelLinkDone}\\n'\n`,
+    });
+    await waitForText({
+      terminalId: panelTerminalId,
+      text: panelLinkDone,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+    const panelLinkMatches = await vscode.commands.executeCommand(
+      "bootty.test.findFileLinks",
+      {
+        terminalId: panelTerminalId,
+        text: "bootty-link-test.txt",
+        limit: FIND_TEXT_LIMIT,
+        timeoutMs: READY_TIMEOUT_MS,
+      },
+    );
+    assert.ok(panelLinkMatches > 0, "File link not detected in panel terminal");
+
+  const panelIdsBefore = await getPanelTerminalIds();
+  await vscode.commands.executeCommand("bootty.newTerminalInPanel");
+  const secondPanelId = await waitForNewPanelTerminal(
+    panelIdsBefore,
+    READY_TIMEOUT_MS,
+  );
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: secondPanelId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  const secondPanelLabel = "BOOTTY_PANEL_SECOND";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: secondPanelId,
+    data: `printf '${secondPanelLabel}\\n'\n`,
+  });
+  await waitForText({
+    terminalId: secondPanelId,
+    text: secondPanelLabel,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  const envTermLabel = "BOOTTY_ENV_TERM_PROGRAM";
+  const envColorLabel = "BOOTTY_ENV_COLORTERM";
+  const envVersionLabel = "BOOTTY_ENV_TERM_PROGRAM_VERSION";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: panelTerminalId,
+    data: `${buildEnvCommand(envTermLabel, "TERM_PROGRAM")}\n`,
+  });
+  await waitForText({
+    terminalId: panelTerminalId,
+    text: `${envTermLabel}=bootty`,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: panelTerminalId,
+    data: `${buildEnvCommand(envColorLabel, "COLORTERM")}\n`,
+  });
+  await waitForText({
+    terminalId: panelTerminalId,
+    text: `${envColorLabel}=truecolor`,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: panelTerminalId,
+    data: `${buildEnvCommand(envVersionLabel, "TERM_PROGRAM_VERSION")}\n`,
+  });
+  await waitForText({
+    terminalId: panelTerminalId,
+    text: `${envVersionLabel}=0.4.0`,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  const burstLabel = "BOOTTY_COLOR_BURST";
+  const burstDone = "BOOTTY_COLOR_BURST_DONE";
+  const burstCommand = buildBurstColorCommand(burstLabel, 50, burstDone, "32");
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: panelTerminalId,
+    data: `${burstCommand}\n`,
+  });
+  await waitForText({
+    terminalId: panelTerminalId,
+    text: burstDone,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  const afterBurstLabel = "BOOTTY_AFTER_BURST_OK";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: panelTerminalId,
+    data: `printf '${afterBurstLabel}\\n'\n`,
+  });
+  await waitForText({
+    terminalId: panelTerminalId,
+    text: afterBurstLabel,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  const editorTerminalId = await vscode.commands.executeCommand(
+    "bootty.newTerminalInEditor",
+  );
+  assert.ok(editorTerminalId, "Editor terminal ID missing");
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: editorTerminalId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  const editorText = "BOOTTY_COLOR_TEST_EDITOR";
+  const editorDone = "BOOTTY_COLOR_DONE_EDITOR";
+  const editorCommand = buildColorCommand(editorText, editorDone);
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: editorTerminalId,
+    data: `${editorCommand}\n`,
+  });
+  await waitForText({
+    terminalId: editorTerminalId,
+    text: editorText,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+  await waitForText({
+    terminalId: editorTerminalId,
+    text: editorDone,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  const linkLabel = "BOOTTY_LINK_PATH";
+  const linkDone = "BOOTTY_LINK_DONE";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: editorTerminalId,
+    data: `printf '\\x1b]7;file://localhost${encodedCwd}\\x07'\n`,
+  });
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: editorTerminalId,
+    data: `printf '${linkLabel} bootty-link-test.txt:2:1\\n${linkDone}\\n'\n`,
+  });
+  await waitForText({
+    terminalId: editorTerminalId,
+    text: linkDone,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+  const linkMatches = await vscode.commands.executeCommand(
+    "bootty.test.findFileLinks",
+    {
+      terminalId: editorTerminalId,
+      text: "bootty-link-test.txt",
+      limit: FIND_TEXT_LIMIT,
+      timeoutMs: READY_TIMEOUT_MS,
+    },
+  );
+  assert.ok(linkMatches > 0, "File link not detected in editor terminal");
 
   const result = await vscode.commands.executeCommand("bootty.runBenchmark", {
     scenario: "ptySmall",
     renderer: "auto",
     location: "panel",
     profile: false,
-    timeoutMs: 20000,
+    timeoutMs: READY_TIMEOUT_MS,
   });
 
   assert.ok(result, "Benchmark result missing");
@@ -19,7 +305,12 @@ async function run() {
     "Benchmark duration is invalid",
   );
 
-  setTimeout(() => process.exit(0), 200);
+    setTimeout(() => process.exit(0), 200);
+  } finally {
+    if (linkFilePath && fs.existsSync(linkFilePath)) {
+      fs.unlinkSync(linkFilePath);
+    }
+  }
 }
 
 module.exports = { run };

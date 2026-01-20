@@ -77,6 +77,20 @@ export type ExtensionMessage =
 	| { type: "pty-exit"; terminalId: TerminalId; exitCode: number }
 	| { type: "resize"; terminalId: TerminalId; cols: number; rows: number }
 	| {
+			type: "test-find-text";
+			terminalId: TerminalId;
+			token: string;
+			text: string;
+			limit?: number;
+	  }
+	| {
+			type: "test-file-links";
+			terminalId: TerminalId;
+			token: string;
+			text: string;
+			limit?: number;
+	  }
+	| {
 			type: "update-settings";
 			terminalId: TerminalId;
 			settings: DisplaySettings;
@@ -160,6 +174,18 @@ export type WebviewMessage =
 			terminalId: TerminalId;
 			cols: number;
 			rows: number;
+	  }
+	| {
+			type: "test-find-text-result";
+			terminalId: TerminalId;
+			token: string;
+			found: boolean;
+	  }
+	| {
+			type: "test-file-links-result";
+			terminalId: TerminalId;
+			token: string;
+			matches: number;
 	  }
 	| {
 			type: "terminal-ready";

@@ -230,6 +230,50 @@ interface ConfigApplyWatcher {
 	timeoutId: NodeJS.Timeout;
 }
 
+interface HandshakeOptions {
+	terminalId?: TerminalId;
+	timeoutMs?: number;
+	panelTimeoutMs?: number;
+}
+
+interface HandshakeResult {
+	panelReady: boolean;
+	terminalId: TerminalId;
+	location: TerminalLocation;
+	terminalReady: boolean;
+}
+
+interface TestFindTextOptions {
+	terminalId?: TerminalId;
+	text?: string;
+	limit?: number;
+	timeoutMs?: number;
+}
+
+interface TestFindTextWatcher {
+	resolve: (found: boolean) => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+}
+
+interface TestFileLinksOptions {
+	terminalId?: TerminalId;
+	text?: string;
+	limit?: number;
+	timeoutMs?: number;
+}
+
+interface TestFileLinksWatcher {
+	resolve: (matches: number) => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+}
+
+interface TestSendInputOptions {
+	terminalId?: TerminalId;
+	data?: string;
+}
+
 /** Persisted workspace state */
 interface PersistedWorkspaceState {
 	terminals: PersistedTerminalState[];
@@ -280,6 +324,8 @@ export class TerminalManager implements vscode.Disposable {
 	>();
 	private runtimeConfigOverride?: Partial<RuntimeConfig>;
 	private configApplyWatchers = new Map<string, ConfigApplyWatcher>();
+	private testFindTextWatchers = new Map<string, TestFindTextWatcher>();
+	private testFileLinksWatchers = new Map<string, TestFileLinksWatcher>();
 	private readonly ptyDecoder = new TextDecoder("utf-8");
 	private ptyOutputBatchConfig: {
 		maxBytes: number;
@@ -389,6 +435,290 @@ export class TerminalManager implements vscode.Disposable {
 			lines.push(`${label}-${String(i).padStart(5, "0")}`);
 		}
 		return `${lines.join("\n")}\n`;
+	}
+
+	private parseHandshakeOptions(input: unknown): HandshakeOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const timeoutMs =
+			typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)
+				? raw.timeoutMs
+				: undefined;
+		const panelTimeoutMs =
+			typeof raw.panelTimeoutMs === "number" &&
+			Number.isFinite(raw.panelTimeoutMs)
+				? raw.panelTimeoutMs
+				: undefined;
+		return { terminalId, timeoutMs, panelTimeoutMs };
+	}
+
+	private resolveHandshakeTimeout(
+		value: number | undefined,
+		fallback: number,
+	): number {
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return Math.max(0, value);
+		}
+		return fallback;
+	}
+
+	private resolveExistingTerminalId(
+		targetId: TerminalId | undefined,
+	): TerminalId {
+		if (targetId) {
+			if (this.terminals.has(targetId)) {
+				return targetId;
+			}
+			throw new Error(`Terminal ${targetId} does not exist.`);
+		}
+		if (this.activeTerminalId) {
+			return this.activeTerminalId;
+		}
+		const panelIds = this.getTerminalIds();
+		if (panelIds.length > 0) {
+			return panelIds[0];
+		}
+		const first = this.terminals.keys().next().value as TerminalId | undefined;
+		if (first) {
+			return first;
+		}
+		throw new Error("No terminals available to wait for readiness.");
+	}
+
+	private parseTestFindTextOptions(input: unknown): TestFindTextOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const text = typeof raw.text === "string" ? raw.text : undefined;
+		const limit =
+			typeof raw.limit === "number" && Number.isFinite(raw.limit)
+				? raw.limit
+				: undefined;
+		const timeoutMs =
+			typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)
+				? raw.timeoutMs
+				: undefined;
+		return { terminalId, text, limit, timeoutMs };
+	}
+
+	private parseTestFileLinksOptions(input: unknown): TestFileLinksOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const text = typeof raw.text === "string" ? raw.text : undefined;
+		const limit =
+			typeof raw.limit === "number" && Number.isFinite(raw.limit)
+				? raw.limit
+				: undefined;
+		const timeoutMs =
+			typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)
+				? raw.timeoutMs
+				: undefined;
+		return { terminalId, text, limit, timeoutMs };
+	}
+
+	private parseTestSendInputOptions(input: unknown): TestSendInputOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const data = typeof raw.data === "string" ? raw.data : undefined;
+		return { terminalId, data };
+	}
+
+	private requestTestFindText(
+		terminalId: TerminalId,
+		text: string,
+		limit: number | undefined,
+		timeoutMs: number,
+	): Promise<boolean> {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} no longer exists.`),
+			);
+		}
+		if (!instance.ready) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} is not ready for test queries.`),
+			);
+		}
+		const token = crypto.randomUUID();
+		if (this.testFindTextWatchers.has(token)) {
+			return Promise.reject(new Error("Test find-text token collision."));
+		}
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.testFindTextWatchers.delete(token);
+				reject(new Error("Timed out waiting for test-find-text result."));
+			}, timeoutMs);
+			this.testFindTextWatchers.set(token, {
+				resolve: (found) => {
+					clearTimeout(timeoutId);
+					resolve(found);
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+			});
+			this.postToTerminal(terminalId, {
+				type: "test-find-text",
+				terminalId,
+				token,
+				text,
+				limit,
+			});
+		});
+	}
+
+	private requestTestFileLinks(
+		terminalId: TerminalId,
+		text: string,
+		limit: number | undefined,
+		timeoutMs: number,
+	): Promise<number> {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} no longer exists.`),
+			);
+		}
+		if (!instance.ready) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} is not ready for test queries.`),
+			);
+		}
+		const token = crypto.randomUUID();
+		if (this.testFileLinksWatchers.has(token)) {
+			return Promise.reject(new Error("Test file-links token collision."));
+		}
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.testFileLinksWatchers.delete(token);
+				reject(new Error("Timed out waiting for test-file-links result."));
+			}, timeoutMs);
+			this.testFileLinksWatchers.set(token, {
+				resolve: (matches) => {
+					clearTimeout(timeoutId);
+					resolve(matches);
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+			});
+			this.postToTerminal(terminalId, {
+				type: "test-file-links",
+				terminalId,
+				token,
+				text,
+				limit,
+			});
+		});
+	}
+
+	async waitForHandshake(options: unknown = {}): Promise<HandshakeResult> {
+		const parsed = this.parseHandshakeOptions(options);
+		const terminalTimeoutMs = this.resolveHandshakeTimeout(
+			parsed.timeoutMs,
+			READY_TIMEOUT_MS,
+		);
+		const panelTimeoutMs = this.resolveHandshakeTimeout(
+			parsed.panelTimeoutMs,
+			BENCHMARK_READY_TIMEOUT_MS,
+		);
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			throw new Error(`Terminal ${terminalId} no longer exists.`);
+		}
+		let panelReady = this.panelProvider.isReady;
+		if (instance.location === "panel") {
+			await this.waitForPanelReady(panelTimeoutMs);
+			panelReady = true;
+		}
+		await this.waitForTerminalReady(terminalId, terminalTimeoutMs);
+		return {
+			panelReady,
+			terminalId,
+			location: instance.location,
+			terminalReady: true,
+		};
+	}
+
+	async findText(options: unknown = {}): Promise<boolean> {
+		const parsed = this.parseTestFindTextOptions(options);
+		const text = parsed.text?.trim();
+		if (!text) {
+			throw new Error("Test find-text requires a non-empty text string.");
+		}
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const timeoutMs = this.resolveHandshakeTimeout(parsed.timeoutMs, 5000);
+		const limit =
+			typeof parsed.limit === "number" && Number.isFinite(parsed.limit)
+				? Math.max(1, Math.floor(parsed.limit))
+				: undefined;
+		return await this.requestTestFindText(terminalId, text, limit, timeoutMs);
+	}
+
+	async findFileLinks(options: unknown = {}): Promise<number> {
+		const parsed = this.parseTestFileLinksOptions(options);
+		const text = parsed.text?.trim();
+		if (!text) {
+			throw new Error("Test file-links requires a non-empty text string.");
+		}
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const timeoutMs = this.resolveHandshakeTimeout(parsed.timeoutMs, 5000);
+		const limit =
+			typeof parsed.limit === "number" && Number.isFinite(parsed.limit)
+				? Math.max(1, Math.floor(parsed.limit))
+				: undefined;
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			throw new Error(`Terminal ${terminalId} no longer exists.`);
+		}
+		if (instance.location === "panel") {
+			const found = await this.findText({
+				terminalId,
+				text,
+				limit,
+				timeoutMs,
+			});
+			return found ? 1 : 0;
+		}
+		return await this.requestTestFileLinks(terminalId, text, limit, timeoutMs);
+	}
+
+	sendTestInput(options: unknown = {}): void {
+		const parsed = this.parseTestSendInputOptions(options);
+		if (!parsed.data) {
+			throw new Error("Test input requires a data string.");
+		}
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		this.handleTerminalInput(terminalId, parsed.data);
 	}
 
 	private parseBenchmarkOptions(input: unknown): BenchmarkOptions {
@@ -1859,6 +2189,22 @@ export class TerminalManager implements vscode.Disposable {
 					message.token,
 				);
 				break;
+			case "test-find-text-result": {
+				const watcher = this.testFindTextWatchers.get(message.token);
+				if (watcher) {
+					this.testFindTextWatchers.delete(message.token);
+					watcher.resolve(message.found);
+				}
+				break;
+			}
+			case "test-file-links-result": {
+				const watcher = this.testFileLinksWatchers.get(message.token);
+				if (watcher) {
+					this.testFileLinksWatchers.delete(message.token);
+					watcher.resolve(message.matches);
+				}
+				break;
+			}
 			case "profile-data":
 				this.handleProfileData(message.sessionId, message.events);
 				break;

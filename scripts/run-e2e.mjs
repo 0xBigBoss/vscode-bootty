@@ -12,10 +12,19 @@ const userDataDir = path.resolve(__dirname, `../.vscode-test/e2e-user-data-${Dat
 
 async function main() {
   try {
+    const launchArgs = [
+      workspacePath,
+      "--disable-workspace-trust",
+      `--user-data-dir=${userDataDir}`,
+    ];
+    if (process.env.BOOTTY_E2E_DISABLE_GPU === "1") {
+      launchArgs.push("--disable-gpu");
+    }
+
     await runTests({
       extensionDevelopmentPath,
       extensionTestsPath,
-      launchArgs: [workspacePath, "--disable-workspace-trust", `--user-data-dir=${userDataDir}`],
+      launchArgs,
       extensionTestsEnv: {
         ...process.env,
       },
