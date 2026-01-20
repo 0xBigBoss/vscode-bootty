@@ -29,6 +29,7 @@ import type {
 	RuntimeConfig,
 	TerminalGroup,
 	TerminalTheme,
+	TestKeyEvent,
 	WebviewMessage,
 } from "./types/messages";
 import type {
@@ -272,6 +273,11 @@ interface TestFileLinksWatcher {
 interface TestSendInputOptions {
 	terminalId?: TerminalId;
 	data?: string;
+}
+
+interface TestDispatchKeysOptions {
+	terminalId?: TerminalId;
+	keys?: TestKeyEvent[];
 }
 
 /** Persisted workspace state */
@@ -546,6 +552,23 @@ export class TerminalManager implements vscode.Disposable {
 		return { terminalId, data };
 	}
 
+	private parseTestDispatchKeysOptions(
+		input: unknown,
+	): TestDispatchKeysOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const keys = Array.isArray(raw.keys)
+			? (raw.keys as TestKeyEvent[])
+			: undefined;
+		return { terminalId, keys };
+	}
+
 	private requestTestFindText(
 		terminalId: TerminalId,
 		text: string,
@@ -719,6 +742,26 @@ export class TerminalManager implements vscode.Disposable {
 		}
 		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
 		this.handleTerminalInput(terminalId, parsed.data);
+	}
+
+	dispatchTestKeys(options: unknown = {}): void {
+		const parsed = this.parseTestDispatchKeysOptions(options);
+		if (!parsed.keys || parsed.keys.length === 0) {
+			throw new Error("Test key dispatch requires a non-empty keys array.");
+		}
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			throw new Error(`Terminal ${terminalId} no longer exists.`);
+		}
+		if (instance.location !== "panel") {
+			throw new Error("Test key dispatch only supports panel terminals.");
+		}
+		this.postToTerminal(terminalId, {
+			type: "test-dispatch-keys",
+			terminalId,
+			keys: parsed.keys,
+		});
 	}
 
 	private parseBenchmarkOptions(input: unknown): BenchmarkOptions {

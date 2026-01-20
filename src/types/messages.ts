@@ -71,11 +71,25 @@ export interface TerminalTheme {
 	brightWhite?: string;
 }
 
+export interface TestKeyEvent {
+	key: string;
+	code?: string;
+	ctrlKey?: boolean;
+	shiftKey?: boolean;
+	altKey?: boolean;
+	metaKey?: boolean;
+}
+
 /** Extension -> Webview (editor terminals) */
 export type ExtensionMessage =
 	| { type: "pty-data"; terminalId: TerminalId; data: Uint8Array }
 	| { type: "pty-exit"; terminalId: TerminalId; exitCode: number }
 	| { type: "resize"; terminalId: TerminalId; cols: number; rows: number }
+	| {
+			type: "test-dispatch-keys";
+			terminalId: TerminalId;
+			keys: TestKeyEvent[];
+	  }
 	| {
 			type: "test-find-text";
 			terminalId: TerminalId;

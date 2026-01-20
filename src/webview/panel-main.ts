@@ -44,6 +44,7 @@ import type {
 	RuntimeConfig,
 	TerminalGroup,
 	TerminalTheme,
+	TestKeyEvent,
 } from "../types/messages";
 import type { TerminalId } from "../types/terminal";
 import { ContextMenu } from "./context-menu";
@@ -499,6 +500,33 @@ const boottyPanelInit = async (): Promise<void> => {
 			ptyQueueState.set(id, state);
 		}
 		return state;
+	}
+
+	function dispatchTestKeyEvents(
+		terminalId: TerminalId,
+		keys: TestKeyEvent[],
+	): void {
+		const terminal = terminals.get(terminalId);
+		if (!terminal) return;
+		const termElement = (terminal.term as { element?: HTMLElement }).element;
+		const target =
+			termElement ??
+			terminal.container.querySelector(".terminal-container") ??
+			terminal.container;
+		target.focus();
+		for (const keyEvent of keys) {
+			const event = new KeyboardEvent("keydown", {
+				key: keyEvent.key,
+				code: keyEvent.code ?? "",
+				ctrlKey: Boolean(keyEvent.ctrlKey),
+				shiftKey: Boolean(keyEvent.shiftKey),
+				altKey: Boolean(keyEvent.altKey),
+				metaKey: Boolean(keyEvent.metaKey),
+				bubbles: true,
+				cancelable: true,
+			});
+			target.dispatchEvent(event);
+		}
 	}
 
 	function mergePtyChunks(
@@ -1974,6 +2002,10 @@ const boottyPanelInit = async (): Promise<void> => {
 					token: msg.token,
 					matches,
 				});
+				break;
+			}
+			case "test-dispatch-keys": {
+				dispatchTestKeyEvents(msg.terminalId, msg.keys);
 				break;
 			}
 

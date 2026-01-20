@@ -7,6 +7,10 @@ const READY_TIMEOUT_MS = Number.parseInt(
   process.env.BOOTTY_E2E_READY_TIMEOUT_MS ?? "20000",
   10,
 );
+const BENCH_TIMEOUT_MS = Number.parseInt(
+  process.env.BOOTTY_E2E_BENCH_TIMEOUT_MS ?? "120000",
+  10,
+);
 
 const FIND_TEXT_POLL_MS = 200;
 const FIND_TEXT_LIMIT = 400;
@@ -43,6 +47,25 @@ async function waitForNewPanelTerminal(existingIds, timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
   }
   throw new Error("Timed out waiting for a new panel terminal");
+}
+
+async function tryFocusPanel() {
+  const focusCommands = [
+    "workbench.action.focusPanel",
+    "workbench.action.focusActiveView",
+  ];
+  for (const command of focusCommands) {
+    try {
+      await vscode.commands.executeCommand(command);
+      return;
+    } catch {
+      // Try next command.
+    }
+  }
+}
+
+function buildKeyEventsFromText(text) {
+  return Array.from(text).map((key) => ({ key }));
 }
 
 function buildColorCommand(label, doneLabel) {
@@ -112,6 +135,23 @@ async function run() {
     );
 
     const panelTerminalId = handshake.terminalId;
+    await tryFocusPanel();
+
+    const keyEchoLabel = "BOOTTY_KEY_ECHO_0X_TEST";
+    const keyEvents = [
+      ...buildKeyEventsFromText(`echo ${keyEchoLabel}`),
+      { key: "Enter", code: "Enter" },
+    ];
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: panelTerminalId,
+      keys: keyEvents,
+    });
+    await waitForText({
+      terminalId: panelTerminalId,
+      text: keyEchoLabel,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
     const panelText = "BOOTTY_COLOR_TEST_PANEL";
     const panelDone = "BOOTTY_COLOR_DONE_PANEL";
     const panelCommand = buildColorCommand(panelText, panelDone);
@@ -304,6 +344,30 @@ async function run() {
     Number.isFinite(result.durationMs) && result.durationMs > 0,
     "Benchmark duration is invalid",
   );
+
+  const suiteResult = await vscode.commands.executeCommand(
+    "bootty.runBenchmark",
+    {
+      scenario: "ptySuite",
+      renderer: "webgl",
+      location: "panel",
+      profile: false,
+      timeoutMs: BENCH_TIMEOUT_MS,
+    },
+  );
+  assert.ok(suiteResult, "Benchmark suite result missing");
+  assert.equal(suiteResult.scenario, "ptySuite");
+  assert.ok(suiteResult.outputPath, "Benchmark suite outputPath missing");
+  assert.ok(
+    fs.existsSync(suiteResult.outputPath),
+    `Benchmark suite output missing: ${suiteResult.outputPath}`,
+  );
+  const suiteContents = JSON.parse(
+    fs.readFileSync(suiteResult.outputPath, "utf8"),
+  );
+  assert.ok(suiteContents?.results, "Benchmark suite results missing");
+  assert.ok(suiteContents.results.colors, "Benchmark suite colors missing");
+  assert.ok(suiteContents.results.throughput, "Benchmark suite throughput missing");
 
     setTimeout(() => process.exit(0), 200);
   } finally {
