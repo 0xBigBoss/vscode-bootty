@@ -508,6 +508,18 @@ const boottyPanelInit = async (): Promise<void> => {
 	): void {
 		const terminal = terminals.get(terminalId);
 		if (!terminal) return;
+		const resolveLegacyKeyCode = (key: string): number | undefined => {
+			switch (key) {
+				case "Backspace":
+					return 8;
+				case "Tab":
+					return 9;
+				case "Enter":
+					return 13;
+				default:
+					return undefined;
+			}
+		};
 		const termElement = (terminal.term as { element?: HTMLElement }).element;
 		const target =
 			termElement ??
@@ -515,6 +527,7 @@ const boottyPanelInit = async (): Promise<void> => {
 			terminal.container;
 		target.focus();
 		for (const keyEvent of keys) {
+			const legacyKeyCode = resolveLegacyKeyCode(keyEvent.key);
 			const event = new KeyboardEvent("keydown", {
 				key: keyEvent.key,
 				code: keyEvent.code ?? "",
@@ -525,6 +538,14 @@ const boottyPanelInit = async (): Promise<void> => {
 				bubbles: true,
 				cancelable: true,
 			});
+			if (legacyKeyCode !== undefined) {
+				Object.defineProperty(event, "keyCode", {
+					get: () => legacyKeyCode,
+				});
+				Object.defineProperty(event, "which", {
+					get: () => legacyKeyCode,
+				});
+			}
 			target.dispatchEvent(event);
 		}
 	}

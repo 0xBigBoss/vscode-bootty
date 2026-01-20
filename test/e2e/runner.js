@@ -211,6 +211,33 @@ async function run() {
       timeoutMs: READY_TIMEOUT_MS,
     });
 
+    const readTabLabel = "BOOTTY_READ_TAB_TEST";
+    const readTabSuffix = "TABMARK";
+    await vscode.commands.executeCommand("bootty.test.sendInput", {
+      terminalId: panelTerminalId,
+      data: `read -r line; printf '${readTabLabel}:%s\\n' "$line"\n`,
+    });
+    const readTabEvents = [
+      ...buildKeyEventsFromText("0x"),
+      { key: "Tab", code: "Tab" },
+      ...buildKeyEventsFromText(readTabSuffix),
+      { key: "Enter", code: "Enter" },
+    ];
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: panelTerminalId,
+      keys: readTabEvents,
+    });
+    await waitForText({
+      terminalId: panelTerminalId,
+      text: `${readTabLabel}:0x`,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+    await waitForText({
+      terminalId: panelTerminalId,
+      text: readTabSuffix,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
     const panelText = "BOOTTY_COLOR_TEST_PANEL";
     const panelDone = "BOOTTY_COLOR_DONE_PANEL";
     const panelCommand = buildColorCommand(panelText, panelDone);
@@ -342,6 +369,15 @@ async function run() {
     text: hereLabel,
     timeoutMs: READY_TIMEOUT_MS,
   });
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: hereTerminalId,
+    data: "pwd\n",
+  });
+  await waitForText({
+    terminalId: hereTerminalId,
+    text: path.basename(nestedFile.nestedDir),
+    timeoutMs: READY_TIMEOUT_MS,
+  });
 
   const activeLabel1 = "BOOTTY_ACTIVE_BEFORE_TABS";
   await vscode.commands.executeCommand("bootty.test.sendInput", {
@@ -454,6 +490,26 @@ async function run() {
     timeoutMs: READY_TIMEOUT_MS,
   });
 
+  await vscode.commands.executeCommand("bootty.togglePanel");
+  await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
+  await vscode.commands.executeCommand("bootty.togglePanel");
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: panelTerminalId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  await tryFocusPanel();
+  const toggleLabel = "BOOTTY_PANEL_TOGGLE_OK";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: panelTerminalId,
+    data: `printf '${toggleLabel}\\n'\n`,
+  });
+  await waitForText({
+    terminalId: panelTerminalId,
+    text: toggleLabel,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
   const editorTerminalId = await vscode.commands.executeCommand(
     "bootty.newTerminalInEditor",
   );
@@ -545,6 +601,11 @@ async function run() {
   assert.ok(suiteContents?.results, "Benchmark suite results missing");
   assert.ok(suiteContents.results.colors, "Benchmark suite colors missing");
   assert.ok(suiteContents.results.throughput, "Benchmark suite throughput missing");
+
+  await vscode.commands.executeCommand("bootty.rendererInfo");
+  await vscode.commands.executeCommand("bootty.toggleProfiling");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await vscode.commands.executeCommand("bootty.toggleProfiling");
 
     setTimeout(() => process.exit(0), 200);
   } finally {
