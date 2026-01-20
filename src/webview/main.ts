@@ -1055,6 +1055,24 @@ const boottyInit = async (): Promise<void> => {
 				});
 				break;
 			}
+			case "test-search": {
+				if (msg.action === "show") {
+					searchController.show();
+				} else if (msg.action === "hide") {
+					searchController.hide();
+				}
+				if (msg.action !== "hide" && typeof msg.query === "string") {
+					searchController.setQuery(msg.query);
+				}
+				const state = searchController.getState();
+				vscode.postMessage({
+					type: "test-search-result",
+					terminalId: TERMINAL_ID,
+					token: msg.token,
+					state,
+				});
+				break;
+			}
 			case "pty-data": {
 				if (msg.data.byteLength > 0) {
 					pendingPtyMerge.push(msg.data);

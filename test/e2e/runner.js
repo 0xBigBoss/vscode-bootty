@@ -619,6 +619,64 @@ async function run() {
   );
   assert.ok(linkMatches > 0, "File link not detected in editor terminal");
 
+  const editorSearchNeedle = "BOOTTY_EDITOR_SEARCH_NEEDLE";
+  const editorSearchLine2 = `${editorSearchNeedle}-2`;
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: editorTerminalId,
+    data: `printf '${editorSearchNeedle}-1\\n${editorSearchLine2}\\n'\n`,
+  });
+  await waitForText({
+    terminalId: editorTerminalId,
+    text: editorSearchLine2,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+  await vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+  await vscode.commands.executeCommand("bootty.search");
+  const editorSearchVisibleState = await vscode.commands.executeCommand(
+    "bootty.test.search",
+    {
+      terminalId: editorTerminalId,
+      action: "status",
+    },
+  );
+  assert.equal(
+    editorSearchVisibleState?.visible,
+    true,
+    "Editor search overlay did not open",
+  );
+  await vscode.commands.executeCommand("bootty.test.search", {
+    terminalId: editorTerminalId,
+    query: editorSearchNeedle,
+  });
+  const editorSearchState = await vscode.commands.executeCommand(
+    "bootty.test.search",
+    {
+      terminalId: editorTerminalId,
+      action: "status",
+    },
+  );
+  const editorResultsMatch = /of\s+(\d+)/.exec(
+    editorSearchState?.resultsText ?? "",
+  );
+  assert.ok(editorResultsMatch, "Editor search results missing");
+  const editorResultsTotal = Number.parseInt(editorResultsMatch[1], 10);
+  assert.ok(
+    Number.isFinite(editorResultsTotal) && editorResultsTotal >= 2,
+    "Editor search results count invalid",
+  );
+  await vscode.commands.executeCommand("bootty.test.search", {
+    terminalId: editorTerminalId,
+    action: "hide",
+  });
+  const editorSearchHiddenState = await vscode.commands.executeCommand(
+    "bootty.test.search",
+    {
+      terminalId: editorTerminalId,
+      action: "status",
+    },
+  );
+  assert.equal(editorSearchHiddenState?.visible, false);
+
   const result = await vscode.commands.executeCommand("bootty.runBenchmark", {
     scenario: "ptySmall",
     renderer: "auto",
