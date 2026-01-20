@@ -49,6 +49,23 @@ async function waitForNewPanelTerminal(existingIds, timeoutMs) {
   throw new Error("Timed out waiting for a new panel terminal");
 }
 
+async function waitForTextInAnyTerminal({ terminalIds, text, timeoutMs }) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const terminalId of terminalIds) {
+      const found = await vscode.commands.executeCommand("bootty.test.findText", {
+        terminalId,
+        text,
+        limit: FIND_TEXT_LIMIT,
+        timeoutMs: 2000,
+      });
+      if (found) return terminalId;
+    }
+    await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
+  }
+  throw new Error(`Timed out waiting for text in any terminal: ${text}`);
+}
+
 async function tryFocusPanel() {
   const focusCommands = [
     "workbench.action.focusPanel",
@@ -276,6 +293,45 @@ async function run() {
     text: splitPanelLabel,
     timeoutMs: READY_TIMEOUT_MS,
   });
+
+  const activeLabel1 = "BOOTTY_ACTIVE_BEFORE_TABS";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    data: `printf '${activeLabel1}\\n'\n`,
+  });
+  const panelIdsSnapshot = await getPanelTerminalIds();
+  const activeId1 = await waitForTextInAnyTerminal({
+    terminalIds: panelIdsSnapshot,
+    text: activeLabel1,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  await vscode.commands.executeCommand("bootty.nextTab");
+  const activeLabel2 = "BOOTTY_ACTIVE_AFTER_NEXT";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    data: `printf '${activeLabel2}\\n'\n`,
+  });
+  const activeId2 = await waitForTextInAnyTerminal({
+    terminalIds: panelIdsSnapshot,
+    text: activeLabel2,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+  if (panelIdsSnapshot.length > 1) {
+    assert.ok(panelIdsSnapshot.includes(activeId2));
+  }
+
+  await vscode.commands.executeCommand("bootty.previousTab");
+  const activeLabel3 = "BOOTTY_ACTIVE_AFTER_PREV";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    data: `printf '${activeLabel3}\\n'\n`,
+  });
+  const activeId3 = await waitForTextInAnyTerminal({
+    terminalIds: panelIdsSnapshot,
+    text: activeLabel3,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+  if (panelIdsSnapshot.length > 1) {
+    assert.ok(panelIdsSnapshot.includes(activeId3));
+  }
 
   const config = vscode.workspace.getConfiguration("bootty");
   const previousDebugLog = readDebugLogValue(config);
