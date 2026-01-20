@@ -130,8 +130,17 @@ function ensureTestFile(workspacePath) {
   return filePath;
 }
 
+function ensureNestedWorkspaceFile(workspacePath) {
+  const nestedDir = path.join(workspacePath, "bootty-e2e-nested");
+  fs.mkdirSync(nestedDir, { recursive: true });
+  const filePath = path.join(nestedDir, "bootty-e2e-nested.txt");
+  fs.writeFileSync(filePath, "nested\n", "utf8");
+  return { filePath, nestedDir };
+}
+
 async function run() {
   let linkFilePath = null;
+  let nestedFile = null;
   try {
     const forcedRenderer = process.env.BOOTTY_E2E_RENDERER;
     if (forcedRenderer) {
@@ -291,6 +300,46 @@ async function run() {
   await waitForText({
     terminalId: splitPanelId,
     text: splitPanelLabel,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  const newTerminalIdsBefore = await getPanelTerminalIds();
+  await vscode.commands.executeCommand("bootty.newTerminal");
+  const newTerminalId = await waitForNewPanelTerminal(
+    newTerminalIdsBefore,
+    READY_TIMEOUT_MS,
+  );
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: newTerminalId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+
+  nestedFile = ensureNestedWorkspaceFile(workspacePath);
+  const nestedDoc = await vscode.workspace.openTextDocument(nestedFile.filePath);
+  await vscode.window.showTextDocument(nestedDoc);
+  const hereIdsBefore = await getPanelTerminalIds();
+  await vscode.commands.executeCommand(
+    "bootty.newTerminalHere",
+    vscode.Uri.file(nestedFile.filePath),
+  );
+  const hereTerminalId = await waitForNewPanelTerminal(
+    hereIdsBefore,
+    READY_TIMEOUT_MS,
+  );
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: hereTerminalId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  const hereLabel = "BOOTTY_NEW_TERMINAL_HERE_READY";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: hereTerminalId,
+    data: `printf '${hereLabel}\\n'\n`,
+  });
+  await waitForText({
+    terminalId: hereTerminalId,
+    text: hereLabel,
     timeoutMs: READY_TIMEOUT_MS,
   });
 
@@ -501,6 +550,9 @@ async function run() {
   } finally {
     if (linkFilePath && fs.existsSync(linkFilePath)) {
       fs.unlinkSync(linkFilePath);
+    }
+    if (nestedFile?.filePath && fs.existsSync(nestedFile.filePath)) {
+      fs.unlinkSync(nestedFile.filePath);
     }
   }
 }
