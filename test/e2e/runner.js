@@ -56,6 +56,16 @@ async function waitForNewPanelTerminal(existingIds, timeoutMs) {
   throw new Error("Timed out waiting for a new panel terminal");
 }
 
+async function waitForPanelTerminalClosed(terminalId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ids = await getPanelTerminalIds();
+    if (!ids.includes(terminalId)) return;
+    await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
+  }
+  throw new Error(`Timed out waiting for terminal to close: ${terminalId}`);
+}
+
 async function waitForNewEditorTerminal(existingIds, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   const existing = new Set(existingIds);
@@ -66,6 +76,18 @@ async function waitForNewEditorTerminal(existingIds, timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
   }
   throw new Error("Timed out waiting for a new editor terminal");
+}
+
+async function waitForEditorTerminalClosed(terminalId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ids = await getEditorTerminalIds();
+    if (!ids.includes(terminalId)) return;
+    await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
+  }
+  throw new Error(
+    `Timed out waiting for editor terminal to close: ${terminalId}`,
+  );
 }
 
 async function waitForTextInAnyTerminal({ terminalIds, text, timeoutMs }) {
@@ -331,6 +353,30 @@ async function run() {
     );
     assert.equal(searchHiddenState?.visible, false);
 
+    const searchShortcutKeys = [
+      { key: "f", code: "KeyF", ctrlKey: true },
+    ];
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: panelTerminalId,
+      keys: searchShortcutKeys,
+    });
+    const searchShortcutState = await vscode.commands.executeCommand(
+      "bootty.test.search",
+      {
+        terminalId: panelTerminalId,
+        action: "status",
+      },
+    );
+    assert.equal(
+      searchShortcutState?.visible,
+      true,
+      "Search shortcut did not open overlay",
+    );
+    await vscode.commands.executeCommand("bootty.test.search", {
+      terminalId: panelTerminalId,
+      action: "hide",
+    });
+
     const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     assert.ok(workspacePath, "Workspace path missing");
     const encodedCwd = encodeURI(workspacePath);
@@ -404,6 +450,23 @@ async function run() {
     text: splitPanelLabel,
     timeoutMs: READY_TIMEOUT_MS,
   });
+
+  const closeIdsBefore = await getPanelTerminalIds();
+  await vscode.commands.executeCommand("bootty.newTerminalInPanel");
+  const closePanelId = await waitForNewPanelTerminal(
+    closeIdsBefore,
+    READY_TIMEOUT_MS,
+  );
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: closePanelId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: closePanelId,
+    data: "exit\n",
+  });
+  await waitForPanelTerminalClosed(closePanelId, READY_TIMEOUT_MS);
 
   const newTerminalIdsBefore = await getPanelTerminalIds();
   await vscode.commands.executeCommand("bootty.newTerminal");
@@ -733,6 +796,23 @@ async function run() {
     previousDefaultLocation,
     vscode.ConfigurationTarget.Workspace,
   );
+
+  const editorCloseIdsBefore = await getEditorTerminalIds();
+  await vscode.commands.executeCommand("bootty.newTerminalInEditor");
+  const editorCloseId = await waitForNewEditorTerminal(
+    editorCloseIdsBefore,
+    READY_TIMEOUT_MS,
+  );
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: editorCloseId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: editorCloseId,
+    data: "exit\n",
+  });
+  await waitForEditorTerminalClosed(editorCloseId, READY_TIMEOUT_MS);
 
   const result = await vscode.commands.executeCommand("bootty.runBenchmark", {
     scenario: "ptySmall",
