@@ -10,7 +10,9 @@ out/
 npm-debug.log*
 
 # Editor
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
 .vscode-test/
 .vscode-test-profile/
 *.swp
