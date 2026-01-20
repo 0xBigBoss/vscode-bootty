@@ -68,6 +68,23 @@ function buildKeyEventsFromText(text) {
   return Array.from(text).map((key) => ({ key }));
 }
 
+function readDebugLogValue(config) {
+  const inspect = config.inspect("debugLog");
+  if (inspect?.globalValue !== undefined) return inspect.globalValue;
+  if (inspect?.workspaceValue !== undefined) return inspect.workspaceValue;
+  return config.get("debugLog", "");
+}
+
+async function waitForConfigValue(config, readValue, predicate, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = readValue(config);
+    if (predicate(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return readValue(config);
+}
+
 function buildColorCommand(label, doneLabel) {
   return `printf '\\x1b[31m${label}\\x1b[0m\\n${doneLabel}\\n'`;
 }
@@ -152,6 +169,22 @@ async function run() {
       timeoutMs: READY_TIMEOUT_MS,
     });
 
+    const backspaceLabel = "BOOTTY_KEY_BACKSPACE_TEST";
+    const backspaceEvents = [
+      ...buildKeyEventsFromText(`echo ${backspaceLabel}X`),
+      { key: "Backspace", code: "Backspace" },
+      { key: "Enter", code: "Enter" },
+    ];
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: panelTerminalId,
+      keys: backspaceEvents,
+    });
+    await waitForText({
+      terminalId: panelTerminalId,
+      text: backspaceLabel,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
     const panelText = "BOOTTY_COLOR_TEST_PANEL";
     const panelDone = "BOOTTY_COLOR_DONE_PANEL";
     const panelCommand = buildColorCommand(panelText, panelDone);
@@ -221,6 +254,45 @@ async function run() {
     text: secondPanelLabel,
     timeoutMs: READY_TIMEOUT_MS,
   });
+
+  const splitIdsBefore = await getPanelTerminalIds();
+  await vscode.commands.executeCommand("bootty.splitTerminal");
+  const splitPanelId = await waitForNewPanelTerminal(
+    splitIdsBefore,
+    READY_TIMEOUT_MS,
+  );
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: splitPanelId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  const splitPanelLabel = "BOOTTY_PANEL_SPLIT";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: splitPanelId,
+    data: `printf '${splitPanelLabel}\\n'\n`,
+  });
+  await waitForText({
+    terminalId: splitPanelId,
+    text: splitPanelLabel,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  const config = vscode.workspace.getConfiguration("bootty");
+  const previousDebugLog = readDebugLogValue(config);
+  await vscode.commands.executeCommand("bootty.toggleDebugLog");
+  const toggledDebugLog = await waitForConfigValue(
+    config,
+    readDebugLogValue,
+    (value) => value !== previousDebugLog,
+  );
+  assert.notEqual(toggledDebugLog, previousDebugLog);
+  await vscode.commands.executeCommand("bootty.toggleDebugLog");
+  const restoredDebugLog = await waitForConfigValue(
+    config,
+    readDebugLogValue,
+    (value) => value === previousDebugLog,
+  );
+  assert.equal(restoredDebugLog, previousDebugLog);
 
   const envTermLabel = "BOOTTY_ENV_TERM_PROGRAM";
   const envColorLabel = "BOOTTY_ENV_COLORTERM";
