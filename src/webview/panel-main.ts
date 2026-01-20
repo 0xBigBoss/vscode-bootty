@@ -2025,6 +2025,27 @@ const boottyPanelInit = async (): Promise<void> => {
 				});
 				break;
 			}
+			case "test-search": {
+				const terminal = terminals.get(msg.terminalId);
+				if (terminal) {
+					if (msg.action === "show") {
+						terminal.searchController.show();
+					} else if (msg.action === "hide") {
+						terminal.searchController.hide();
+					}
+					if (msg.action !== "hide" && typeof msg.query === "string") {
+						terminal.searchController.setQuery(msg.query);
+					}
+					const state = terminal.searchController.getState();
+					vscode.postMessage({
+						type: "test-search-result",
+						terminalId: msg.terminalId,
+						token: msg.token,
+						state,
+					});
+				}
+				break;
+			}
 			case "test-dispatch-keys": {
 				dispatchTestKeyEvents(msg.terminalId, msg.keys);
 				break;

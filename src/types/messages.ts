@@ -80,6 +80,14 @@ export interface TestKeyEvent {
 	metaKey?: boolean;
 }
 
+export type TestSearchAction = "show" | "hide" | "setQuery" | "status";
+
+export interface TestSearchState {
+	visible: boolean;
+	query: string;
+	resultsText: string;
+}
+
 /** Extension -> Webview (editor terminals) */
 export type ExtensionMessage =
 	| { type: "pty-data"; terminalId: TerminalId; data: Uint8Array }
@@ -103,6 +111,13 @@ export type ExtensionMessage =
 			token: string;
 			text: string;
 			limit?: number;
+	  }
+	| {
+			type: "test-search";
+			terminalId: TerminalId;
+			token: string;
+			action?: TestSearchAction;
+			query?: string;
 	  }
 	| {
 			type: "update-settings";
@@ -200,6 +215,12 @@ export type WebviewMessage =
 			terminalId: TerminalId;
 			token: string;
 			matches: number;
+	  }
+	| {
+			type: "test-search-result";
+			terminalId: TerminalId;
+			token: string;
+			state: TestSearchState;
 	  }
 	| {
 			type: "terminal-ready";

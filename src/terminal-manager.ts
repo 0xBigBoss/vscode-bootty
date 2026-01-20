@@ -30,6 +30,8 @@ import type {
 	TerminalGroup,
 	TerminalTheme,
 	TestKeyEvent,
+	TestSearchAction,
+	TestSearchState,
 	WebviewMessage,
 } from "./types/messages";
 import type {
@@ -270,6 +272,19 @@ interface TestFileLinksWatcher {
 	timeoutId: NodeJS.Timeout;
 }
 
+interface TestSearchOptions {
+	terminalId?: TerminalId;
+	action?: TestSearchAction;
+	query?: string;
+	timeoutMs?: number;
+}
+
+interface TestSearchWatcher {
+	resolve: (state: TestSearchState) => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+}
+
 interface TestSendInputOptions {
 	terminalId?: TerminalId;
 	data?: string;
@@ -332,6 +347,7 @@ export class TerminalManager implements vscode.Disposable {
 	private configApplyWatchers = new Map<string, ConfigApplyWatcher>();
 	private testFindTextWatchers = new Map<string, TestFindTextWatcher>();
 	private testFileLinksWatchers = new Map<string, TestFileLinksWatcher>();
+	private testSearchWatchers = new Map<string, TestSearchWatcher>();
 	private readonly ptyDecoder = new TextDecoder("utf-8");
 	private ptyOutputBatchConfig: {
 		maxBytes: number;
@@ -518,6 +534,24 @@ export class TerminalManager implements vscode.Disposable {
 		return { terminalId, text, limit, timeoutMs };
 	}
 
+	private parseTestSearchOptions(input: unknown): TestSearchOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const action = this.isTestSearchAction(raw.action) ? raw.action : undefined;
+		const query = typeof raw.query === "string" ? raw.query : undefined;
+		const timeoutMs =
+			typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)
+				? raw.timeoutMs
+				: undefined;
+		return { terminalId, action, query, timeoutMs };
+	}
+
 	private parseTestFileLinksOptions(input: unknown): TestFileLinksOptions {
 		if (!input || typeof input !== "object") {
 			return {};
@@ -537,6 +571,15 @@ export class TerminalManager implements vscode.Disposable {
 				? raw.timeoutMs
 				: undefined;
 		return { terminalId, text, limit, timeoutMs };
+	}
+
+	private isTestSearchAction(value: unknown): value is TestSearchAction {
+		return (
+			value === "show" ||
+			value === "hide" ||
+			value === "setQuery" ||
+			value === "status"
+		);
 	}
 
 	private parseTestSendInputOptions(input: unknown): TestSendInputOptions {
@@ -663,6 +706,53 @@ export class TerminalManager implements vscode.Disposable {
 		});
 	}
 
+	private requestTestSearchState(
+		terminalId: TerminalId,
+		action: TestSearchAction,
+		query: string | undefined,
+		timeoutMs: number,
+	): Promise<TestSearchState> {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} no longer exists.`),
+			);
+		}
+		if (!instance.ready) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} is not ready for test queries.`),
+			);
+		}
+		const token = crypto.randomUUID();
+		if (this.testSearchWatchers.has(token)) {
+			return Promise.reject(new Error("Test search token collision."));
+		}
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.testSearchWatchers.delete(token);
+				reject(new Error("Timed out waiting for test-search result."));
+			}, timeoutMs);
+			this.testSearchWatchers.set(token, {
+				resolve: (state) => {
+					clearTimeout(timeoutId);
+					resolve(state);
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+			});
+			this.postToTerminal(terminalId, {
+				type: "test-search",
+				terminalId,
+				token,
+				action,
+				query,
+			});
+		});
+	}
+
 	async waitForHandshake(options: unknown = {}): Promise<HandshakeResult> {
 		const parsed = this.parseHandshakeOptions(options);
 		const terminalTimeoutMs = this.resolveHandshakeTimeout(
@@ -733,6 +823,20 @@ export class TerminalManager implements vscode.Disposable {
 			return found ? 1 : 0;
 		}
 		return await this.requestTestFileLinks(terminalId, text, limit, timeoutMs);
+	}
+
+	async testSearch(options: unknown = {}): Promise<TestSearchState> {
+		const parsed = this.parseTestSearchOptions(options);
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const timeoutMs = this.resolveHandshakeTimeout(parsed.timeoutMs, 5000);
+		const action: TestSearchAction =
+			parsed.action ?? (parsed.query ? "setQuery" : "status");
+		return await this.requestTestSearchState(
+			terminalId,
+			action,
+			parsed.query,
+			timeoutMs,
+		);
 	}
 
 	sendTestInput(options: unknown = {}): void {
@@ -2245,6 +2349,14 @@ export class TerminalManager implements vscode.Disposable {
 				if (watcher) {
 					this.testFileLinksWatchers.delete(message.token);
 					watcher.resolve(message.matches);
+				}
+				break;
+			}
+			case "test-search-result": {
+				const watcher = this.testSearchWatchers.get(message.token);
+				if (watcher) {
+					this.testSearchWatchers.delete(message.token);
+					watcher.resolve(message.state);
 				}
 				break;
 			}

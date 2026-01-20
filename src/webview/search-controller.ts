@@ -33,6 +33,12 @@ export interface SearchController {
 	show(): void;
 	hide(): void;
 	destroy(): void;
+	setQuery(query: string): void;
+	getState(): {
+		visible: boolean;
+		query: string;
+		resultsText: string;
+	};
 }
 
 /**
@@ -225,6 +231,23 @@ export function createSearchController(
 		term.focus?.();
 	}
 
+	function setQuery(query: string): void {
+		searchInput.value = query;
+		performSearch(query);
+	}
+
+	function getState(): {
+		visible: boolean;
+		query: string;
+		resultsText: string;
+	} {
+		return {
+			visible: searchOverlay.style.display !== "none",
+			query: searchInput.value,
+			resultsText: searchResultsCount.textContent ?? "",
+		};
+	}
+
 	// Event handlers
 	const handleInput = () => performSearch(searchInput.value);
 
@@ -259,5 +282,5 @@ export function createSearchController(
 		searchOverlay.remove();
 	}
 
-	return { show, hide, destroy };
+	return { show, hide, destroy, setQuery, getState };
 }

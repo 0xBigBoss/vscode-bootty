@@ -346,6 +346,15 @@ export function activate(context: vscode.ExtensionContext) {
 				return await manager.findFileLinks(options);
 			},
 		),
+		vscode.commands.registerCommand(
+			"bootty.test.search",
+			async (options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				return await manager.testSearch(options);
+			},
+		),
 		vscode.commands.registerCommand("bootty.test.getPanelTerminalIds", () => {
 			if (!manager) {
 				throw new Error("BooTTY: Terminal manager not initialized.");

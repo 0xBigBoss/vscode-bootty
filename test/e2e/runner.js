@@ -256,6 +256,62 @@ async function run() {
       timeoutMs: READY_TIMEOUT_MS,
     });
 
+    const searchNeedle = "BOOTTY_SEARCH_NEEDLE";
+    const searchLine2 = `${searchNeedle}-2`;
+    await vscode.commands.executeCommand("bootty.test.sendInput", {
+      terminalId: panelTerminalId,
+      data: `printf '${searchNeedle}-1\\n${searchLine2}\\n'\n`,
+    });
+    await waitForText({
+      terminalId: panelTerminalId,
+      text: searchLine2,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+    await tryFocusPanel();
+    await vscode.commands.executeCommand("bootty.search");
+    const searchVisibleState = await vscode.commands.executeCommand(
+      "bootty.test.search",
+      {
+        terminalId: panelTerminalId,
+        action: "status",
+      },
+    );
+    assert.equal(
+      searchVisibleState?.visible,
+      true,
+      "Search overlay did not open",
+    );
+    await vscode.commands.executeCommand("bootty.test.search", {
+      terminalId: panelTerminalId,
+      query: searchNeedle,
+    });
+    const searchState = await vscode.commands.executeCommand(
+      "bootty.test.search",
+      {
+        terminalId: panelTerminalId,
+        action: "status",
+      },
+    );
+    const resultsMatch = /of\s+(\d+)/.exec(searchState?.resultsText ?? "");
+    assert.ok(resultsMatch, "Search results missing");
+    const resultsTotal = Number.parseInt(resultsMatch[1], 10);
+    assert.ok(
+      Number.isFinite(resultsTotal) && resultsTotal >= 2,
+      "Search results count invalid",
+    );
+    await vscode.commands.executeCommand("bootty.test.search", {
+      terminalId: panelTerminalId,
+      action: "hide",
+    });
+    const searchHiddenState = await vscode.commands.executeCommand(
+      "bootty.test.search",
+      {
+        terminalId: panelTerminalId,
+        action: "status",
+      },
+    );
+    assert.equal(searchHiddenState?.visible, false);
+
     const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     assert.ok(workspacePath, "Workspace path missing");
     const encodedCwd = encodeURI(workspacePath);
