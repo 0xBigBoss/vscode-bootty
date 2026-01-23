@@ -126,6 +126,14 @@ function buildKeyEventsFromText(text) {
   return Array.from(text).map((key) => ({ key }));
 }
 
+function buildImeKeyEventsFromText(text) {
+  return Array.from(text).map((inputText) => ({
+    key: "Process",
+    keyCode: 229,
+    inputText,
+  }));
+}
+
 function readDebugLogValue(config) {
   const inspect = config.inspect("debugLog");
   if (inspect?.globalValue !== undefined) return inspect.globalValue;
@@ -141,6 +149,78 @@ async function waitForConfigValue(config, readValue, predicate, timeoutMs = 2000
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return readValue(config);
+}
+
+async function waitForRendererInfo(terminalId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const info = await vscode.commands.executeCommand(
+      "bootty.test.getRendererInfo",
+      { terminalId },
+    );
+    if (info) return info;
+    await new Promise((resolve) => setTimeout(resolve, FIND_TEXT_POLL_MS));
+  }
+  throw new Error(`Timed out waiting for renderer info: ${terminalId}`);
+}
+
+async function sampleTrailingCells(terminalId, count, timeoutMs) {
+  return await vscode.commands.executeCommand(
+    "bootty.test.sampleTrailingCells",
+    {
+      terminalId,
+      count,
+      timeoutMs,
+    },
+  );
+}
+
+async function directWrite(terminalId, payload, timeoutMs) {
+  return await vscode.commands.executeCommand("bootty.test.directWrite", {
+    terminalId,
+    payload,
+    timeoutMs,
+  });
+}
+
+async function runTypedInputEchoTest(terminalId, label, inputText, timeoutMs) {
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId,
+    data: `read -r line; printf '${label}:%s\\n' "$line"\n`,
+  });
+  const keyEvents = [
+    ...buildKeyEventsFromText(inputText),
+    { key: "Enter", code: "Enter" },
+  ];
+  await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+    terminalId,
+    keys: keyEvents,
+  });
+  await waitForText({
+    terminalId,
+    text: `${label}:${inputText}`,
+    timeoutMs,
+  });
+}
+
+async function runImeTypedInputEchoTest(terminalId, label, inputText, timeoutMs) {
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId,
+    data: `read -r line; printf '${label}:%s\\n' "$line"\n`,
+  });
+  const keyEvents = [
+    ...buildImeKeyEventsFromText(inputText),
+    { key: "Enter", code: "Enter" },
+  ];
+  await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+    terminalId,
+    keys: keyEvents,
+  });
+  await waitForText({
+    terminalId,
+    text: `${label}:${inputText}`,
+    timeoutMs,
+  });
 }
 
 function buildColorCommand(label, doneLabel) {
@@ -182,6 +262,8 @@ function ensureNestedWorkspaceFile(workspacePath) {
 async function run() {
   let linkFilePath = null;
   let nestedFile = null;
+  let previousDefaultLocationValue = undefined;
+  let defaultLocationConfigTarget = null;
   try {
     const forcedRenderer = process.env.BOOTTY_E2E_RENDERER;
     if (forcedRenderer) {
@@ -219,6 +301,301 @@ async function run() {
     );
 
     const panelTerminalId = handshake.terminalId;
+    await tryFocusPanel();
+
+    const rendererConfig = vscode.workspace.getConfiguration("bootty");
+    const rendererConfigTarget = vscode.workspace.workspaceFolders?.length
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+    const defaultLocationConfigAtStart = vscode.workspace.getConfiguration("bootty");
+    const defaultLocationInspect = defaultLocationConfigAtStart.inspect(
+      "defaultTerminalLocation",
+    );
+    previousDefaultLocationValue =
+      rendererConfigTarget === vscode.ConfigurationTarget.Workspace
+        ? defaultLocationInspect?.workspaceValue
+        : defaultLocationInspect?.globalValue;
+    defaultLocationConfigTarget = rendererConfigTarget;
+    await defaultLocationConfigAtStart.update(
+      "defaultTerminalLocation",
+      "panel",
+      rendererConfigTarget,
+    );
+    const previousRenderer = rendererConfig.inspect("renderer");
+    const previousRendererValue =
+      rendererConfigTarget === vscode.ConfigurationTarget.Workspace
+        ? previousRenderer?.workspaceValue
+        : previousRenderer?.globalValue;
+    const renderersToTest = forcedRenderer
+      ? [forcedRenderer]
+      : ["canvas", "webgl"];
+
+    try {
+      for (const renderer of renderersToTest) {
+        if (!forcedRenderer) {
+          await rendererConfig.update(
+            "renderer",
+            renderer,
+            rendererConfigTarget,
+          );
+          await waitForConfigValue(
+            rendererConfig,
+            (config) => config.get("renderer", "auto"),
+            (value) => value === renderer,
+            READY_TIMEOUT_MS,
+          );
+        }
+
+        const rendererIdsBefore = await getPanelTerminalIds();
+        await vscode.commands.executeCommand("bootty.newTerminalInPanel");
+        const rendererTerminalId = await waitForNewPanelTerminal(
+          rendererIdsBefore,
+          READY_TIMEOUT_MS,
+        );
+        await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+          terminalId: rendererTerminalId,
+          timeoutMs: READY_TIMEOUT_MS,
+          panelTimeoutMs: READY_TIMEOUT_MS,
+        });
+        await tryFocusPanel();
+
+        const rendererInfo = await waitForRendererInfo(
+          rendererTerminalId,
+          READY_TIMEOUT_MS,
+        );
+        if (renderer === "webgl" && rendererInfo?.type !== "webgl") {
+          console.warn(
+            `[bootty e2e] WebGL renderer unavailable (got ${rendererInfo?.type ?? "unknown"}). Skipping typed input check.`,
+          );
+        } else {
+          const label = `BOOTTY_TYPED_${renderer.toUpperCase()}`;
+          const inputText = "echo hello world";
+          await runTypedInputEchoTest(
+            rendererTerminalId,
+            label,
+            inputText,
+            READY_TIMEOUT_MS,
+          );
+          const imeLabel = `BOOTTY_TYPED_${renderer.toUpperCase()}_IME`;
+          await runImeTypedInputEchoTest(
+            rendererTerminalId,
+            imeLabel,
+            inputText,
+            READY_TIMEOUT_MS,
+          );
+        }
+
+        await vscode.commands.executeCommand("bootty.test.sendInput", {
+          terminalId: rendererTerminalId,
+          data: "exit\n",
+        });
+        await waitForPanelTerminalClosed(rendererTerminalId, READY_TIMEOUT_MS);
+      }
+    } finally {
+      if (!forcedRenderer) {
+        await rendererConfig.update(
+          "renderer",
+          previousRendererValue === undefined ? undefined : previousRendererValue,
+          rendererConfigTarget,
+        );
+      }
+    }
+
+    const cursorConfig = vscode.workspace.getConfiguration("bootty");
+    const previousCursor = cursorConfig.inspect("cursorStyle");
+    const previousCursorValue =
+      rendererConfigTarget === vscode.ConfigurationTarget.Workspace
+        ? previousCursor?.workspaceValue
+        : previousCursor?.globalValue;
+
+    if (forcedRenderer && forcedRenderer !== "canvas") {
+      console.warn(
+        `[bootty e2e] Renderer forced to ${forcedRenderer}; skipping visual ink sampling test.`,
+      );
+    } else {
+      const rendererBeforeSample = rendererConfig.get("renderer", "auto");
+      try {
+        await cursorConfig.update(
+          "cursorStyle",
+          "underline",
+          rendererConfigTarget,
+        );
+        await waitForConfigValue(
+          cursorConfig,
+          (config) => config.get("cursorStyle", "block"),
+          (value) => value === "underline",
+          READY_TIMEOUT_MS,
+        );
+        if (!forcedRenderer) {
+          await rendererConfig.update(
+            "renderer",
+            "canvas",
+            rendererConfigTarget,
+          );
+          await waitForConfigValue(
+            rendererConfig,
+            (config) => config.get("renderer", "auto"),
+            (value) => value === "canvas",
+            READY_TIMEOUT_MS,
+          );
+        }
+
+        const sampleIdsBefore = await getPanelTerminalIds();
+        await vscode.commands.executeCommand("bootty.newTerminalInPanel");
+        const sampleTerminalId = await waitForNewPanelTerminal(
+          sampleIdsBefore,
+          READY_TIMEOUT_MS,
+        );
+        await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+          terminalId: sampleTerminalId,
+          timeoutMs: READY_TIMEOUT_MS,
+          panelTimeoutMs: READY_TIMEOUT_MS,
+        });
+        await tryFocusPanel();
+
+        const prompt = "BOOTTY_SH> ";
+        await vscode.commands.executeCommand("bootty.test.sendInput", {
+          terminalId: sampleTerminalId,
+          data: `PS1='${prompt}' sh\n`,
+        });
+        await waitForText({
+          terminalId: sampleTerminalId,
+          text: prompt,
+          timeoutMs: READY_TIMEOUT_MS,
+        });
+        const echoKeys = buildKeyEventsFromText("echo");
+        await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+          terminalId: sampleTerminalId,
+          keys: echoKeys,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        const sample = await sampleTrailingCells(
+          sampleTerminalId,
+          4,
+          READY_TIMEOUT_MS,
+        );
+        assert.ok(!sample?.error, sample?.error ?? "sample error");
+        assert.equal(sample.cells.length, 4, "Expected 4 sampled cells");
+        const sampledText = sample.cells.map((cell) => cell.char).join("");
+        assert.equal(sampledText, "echo", "Sampled text mismatch");
+        for (const cell of sample.cells) {
+          assert.equal(
+            cell.hasInk,
+            true,
+            `Expected ink for col ${cell.col} char ${cell.char}`,
+          );
+        }
+
+        await vscode.commands.executeCommand("bootty.test.destroyTerminal", {
+          terminalId: sampleTerminalId,
+        });
+        await waitForPanelTerminalClosed(sampleTerminalId, READY_TIMEOUT_MS);
+        await vscode.commands.executeCommand("bootty.test.activatePanelTerminal", {
+          terminalId: panelTerminalId,
+        });
+        await tryFocusPanel();
+      } finally {
+        await cursorConfig.update(
+          "cursorStyle",
+          previousCursorValue === undefined ? undefined : previousCursorValue,
+          rendererConfigTarget,
+        );
+        if (!forcedRenderer) {
+          await rendererConfig.update(
+            "renderer",
+            rendererBeforeSample,
+            rendererConfigTarget,
+          );
+        }
+      }
+    }
+
+    const directIdsBefore = await getPanelTerminalIds();
+    await vscode.commands.executeCommand("bootty.newTerminalInPanel");
+    const directTerminalId = await waitForNewPanelTerminal(
+      directIdsBefore,
+      READY_TIMEOUT_MS,
+    );
+    await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+      terminalId: directTerminalId,
+      timeoutMs: READY_TIMEOUT_MS,
+      panelTimeoutMs: READY_TIMEOUT_MS,
+    });
+    await tryFocusPanel();
+
+    const redrawPayload = "\x1b[2J\x1b[Hhello\x1b[2DXY";
+    await directWrite(directTerminalId, redrawPayload, READY_TIMEOUT_MS);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const directSample = await sampleTrailingCells(
+      directTerminalId,
+      5,
+      READY_TIMEOUT_MS,
+    );
+    assert.ok(!directSample?.error, directSample?.error ?? "direct sample error");
+    assert.equal(directSample.cells.length, 5, "Expected 5 sampled cells");
+    const directText = directSample.cells.map((cell) => cell.char).join("");
+    assert.equal(directText, "helXY", "Direct redraw text mismatch");
+    for (const cell of directSample.cells) {
+      assert.equal(
+        cell.hasInk,
+        true,
+        `Expected ink for col ${cell.col} char ${cell.char}`,
+      );
+    }
+
+    const zshExpected = "echo hello world";
+    const zshPayload = [
+      "\x1b[2J\x1b[H",
+      "echo ",
+      "h",
+      "\b",
+      "\x1b[1m\x1b[31m",
+      "h",
+      "\x1b[0m\x1b[39m",
+      "ello ",
+      "world",
+      "\x1b[5D",
+      "\x1b[90m",
+      "world",
+      "\x1b[39m",
+      "\x1b[5D",
+      "\x1b[5C",
+      "\x1b[H",
+      `\x1b[${zshExpected.length}C`,
+    ].join("");
+    await directWrite(directTerminalId, zshPayload, READY_TIMEOUT_MS);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const zshSample = await sampleTrailingCells(
+      directTerminalId,
+      zshExpected.length,
+      READY_TIMEOUT_MS,
+    );
+    assert.ok(!zshSample?.error, zshSample?.error ?? "zsh sample error");
+    assert.equal(
+      zshSample.cells.length,
+      zshExpected.length,
+      "Expected zsh sample length",
+    );
+    const zshText = zshSample.cells.map((cell) => cell.char).join("");
+    assert.equal(zshText, zshExpected, "Zsh-like redraw text mismatch");
+    for (const cell of zshSample.cells) {
+      if (cell.char && cell.char !== " ") {
+        assert.equal(
+          cell.hasInk,
+          true,
+          `Expected ink for col ${cell.col} char ${cell.char}`,
+        );
+      }
+    }
+
+    await vscode.commands.executeCommand("bootty.test.destroyTerminal", {
+      terminalId: directTerminalId,
+    });
+    await waitForPanelTerminalClosed(directTerminalId, READY_TIMEOUT_MS);
+    await vscode.commands.executeCommand("bootty.test.activatePanelTerminal", {
+      terminalId: panelTerminalId,
+    });
     await tryFocusPanel();
 
     const keyEchoLabel = "BOOTTY_KEY_ECHO_0X_TEST";
@@ -860,6 +1237,17 @@ async function run() {
 
     setTimeout(() => process.exit(0), 200);
   } finally {
+    if (defaultLocationConfigTarget) {
+      await vscode.workspace
+        .getConfiguration("bootty")
+        .update(
+          "defaultTerminalLocation",
+          previousDefaultLocationValue === undefined
+            ? undefined
+            : previousDefaultLocationValue,
+          defaultLocationConfigTarget,
+        );
+    }
     if (linkFilePath && fs.existsSync(linkFilePath)) {
       fs.unlinkSync(linkFilePath);
     }

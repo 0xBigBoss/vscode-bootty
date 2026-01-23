@@ -4,6 +4,7 @@ import type { TerminalId } from "./terminal";
 export interface DisplaySettings {
 	fontFamily?: string;
 	fontSize?: number;
+	cursorStyle?: "block" | "underline" | "bar";
 }
 
 /** Renderer mode setting */
@@ -78,6 +79,9 @@ export interface TestKeyEvent {
 	shiftKey?: boolean;
 	altKey?: boolean;
 	metaKey?: boolean;
+	keyCode?: number;
+	inputText?: string;
+	inputType?: string;
 }
 
 export type TestSearchAction = "show" | "hide" | "setQuery" | "status";
@@ -86,6 +90,20 @@ export interface TestSearchState {
 	visible: boolean;
 	query: string;
 	resultsText: string;
+}
+
+export interface TestSampleCell {
+	col: number;
+	codepoint: number;
+	char: string;
+	hasInk: boolean;
+}
+
+export interface TestSampleTrailingCellsResult {
+	cursorX: number;
+	cursorY: number;
+	cells: TestSampleCell[];
+	error?: string;
 }
 
 /** Extension -> Webview (editor terminals) */
@@ -118,6 +136,18 @@ export type ExtensionMessage =
 			token: string;
 			action?: TestSearchAction;
 			query?: string;
+	  }
+	| {
+			type: "test-sample-trailing-cells";
+			terminalId: TerminalId;
+			token: string;
+			count: number;
+	  }
+	| {
+			type: "test-direct-write";
+			terminalId: TerminalId;
+			token: string;
+			payload: string;
 	  }
 	| {
 			type: "update-settings";
@@ -221,6 +251,17 @@ export type WebviewMessage =
 			terminalId: TerminalId;
 			token: string;
 			state: TestSearchState;
+	  }
+	| {
+			type: "test-sample-trailing-cells-result";
+			terminalId: TerminalId;
+			token: string;
+			result: TestSampleTrailingCellsResult;
+	  }
+	| {
+			type: "test-direct-write-result";
+			terminalId: TerminalId;
+			token: string;
 	  }
 	| {
 			type: "terminal-ready";

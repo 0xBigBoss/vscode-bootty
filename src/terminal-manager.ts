@@ -30,6 +30,7 @@ import type {
 	TerminalGroup,
 	TerminalTheme,
 	TestKeyEvent,
+	TestSampleTrailingCellsResult,
 	TestSearchAction,
 	TestSearchState,
 	WebviewMessage,
@@ -285,6 +286,30 @@ interface TestSearchWatcher {
 	timeoutId: NodeJS.Timeout;
 }
 
+interface TestSampleTrailingCellsOptions {
+	terminalId?: TerminalId;
+	count?: number;
+	timeoutMs?: number;
+}
+
+interface TestSampleTrailingCellsWatcher {
+	resolve: (result: TestSampleTrailingCellsResult) => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+}
+
+interface TestDirectWriteOptions {
+	terminalId?: TerminalId;
+	payload?: string;
+	timeoutMs?: number;
+}
+
+interface TestDirectWriteWatcher {
+	resolve: () => void;
+	reject: (error: Error) => void;
+	timeoutId: NodeJS.Timeout;
+}
+
 interface TestSendInputOptions {
 	terminalId?: TerminalId;
 	data?: string;
@@ -293,6 +318,10 @@ interface TestSendInputOptions {
 interface TestDispatchKeysOptions {
 	terminalId?: TerminalId;
 	keys?: TestKeyEvent[];
+}
+
+interface TestActivateTerminalOptions {
+	terminalId?: TerminalId;
 }
 
 /** Persisted workspace state */
@@ -348,6 +377,11 @@ export class TerminalManager implements vscode.Disposable {
 	private testFindTextWatchers = new Map<string, TestFindTextWatcher>();
 	private testFileLinksWatchers = new Map<string, TestFileLinksWatcher>();
 	private testSearchWatchers = new Map<string, TestSearchWatcher>();
+	private testSampleTrailingCellsWatchers = new Map<
+		string,
+		TestSampleTrailingCellsWatcher
+	>();
+	private testDirectWriteWatchers = new Map<string, TestDirectWriteWatcher>();
 	private readonly ptyDecoder = new TextDecoder("utf-8");
 	private ptyOutputBatchConfig: {
 		maxBytes: number;
@@ -552,6 +586,45 @@ export class TerminalManager implements vscode.Disposable {
 		return { terminalId, action, query, timeoutMs };
 	}
 
+	private parseTestSampleTrailingCellsOptions(
+		input: unknown,
+	): TestSampleTrailingCellsOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const count =
+			typeof raw.count === "number" && Number.isFinite(raw.count)
+				? Math.max(1, Math.floor(raw.count))
+				: undefined;
+		const timeoutMs =
+			typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)
+				? raw.timeoutMs
+				: undefined;
+		return { terminalId, count, timeoutMs };
+	}
+
+	private parseTestDirectWriteOptions(input: unknown): TestDirectWriteOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const payload = typeof raw.payload === "string" ? raw.payload : undefined;
+		const timeoutMs =
+			typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs)
+				? raw.timeoutMs
+				: undefined;
+		return { terminalId, payload, timeoutMs };
+	}
+
 	private parseTestFileLinksOptions(input: unknown): TestFileLinksOptions {
 		if (!input || typeof input !== "object") {
 			return {};
@@ -610,6 +683,20 @@ export class TerminalManager implements vscode.Disposable {
 			? (raw.keys as TestKeyEvent[])
 			: undefined;
 		return { terminalId, keys };
+	}
+
+	private parseTestActivateTerminalOptions(
+		input: unknown,
+	): TestActivateTerminalOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		return { terminalId };
 	}
 
 	private requestTestFindText(
@@ -753,6 +840,100 @@ export class TerminalManager implements vscode.Disposable {
 		});
 	}
 
+	private requestTestSampleTrailingCells(
+		terminalId: TerminalId,
+		count: number,
+		timeoutMs: number,
+	): Promise<TestSampleTrailingCellsResult> {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} no longer exists.`),
+			);
+		}
+		if (!instance.ready) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} is not ready for test queries.`),
+			);
+		}
+		const token = crypto.randomUUID();
+		if (this.testSampleTrailingCellsWatchers.has(token)) {
+			return Promise.reject(
+				new Error("Test sample-trailing-cells token collision."),
+			);
+		}
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.testSampleTrailingCellsWatchers.delete(token);
+				reject(
+					new Error("Timed out waiting for test-sample-trailing-cells result."),
+				);
+			}, timeoutMs);
+			this.testSampleTrailingCellsWatchers.set(token, {
+				resolve: (result) => {
+					clearTimeout(timeoutId);
+					resolve(result);
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+			});
+			this.postToTerminal(terminalId, {
+				type: "test-sample-trailing-cells",
+				terminalId,
+				token,
+				count,
+			});
+		});
+	}
+
+	private requestTestDirectWrite(
+		terminalId: TerminalId,
+		payload: string,
+		timeoutMs: number,
+	): Promise<void> {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} no longer exists.`),
+			);
+		}
+		if (!instance.ready) {
+			return Promise.reject(
+				new Error(`Terminal ${terminalId} is not ready for test writes.`),
+			);
+		}
+		const token = crypto.randomUUID();
+		if (this.testDirectWriteWatchers.has(token)) {
+			return Promise.reject(new Error("Test direct-write token collision."));
+		}
+		return new Promise((resolve, reject) => {
+			const timeoutId = setTimeout(() => {
+				this.testDirectWriteWatchers.delete(token);
+				reject(new Error("Timed out waiting for test-direct-write result."));
+			}, timeoutMs);
+			this.testDirectWriteWatchers.set(token, {
+				resolve: () => {
+					clearTimeout(timeoutId);
+					resolve();
+				},
+				reject: (error) => {
+					clearTimeout(timeoutId);
+					reject(error);
+				},
+				timeoutId,
+			});
+			this.postToTerminal(terminalId, {
+				type: "test-direct-write",
+				terminalId,
+				token,
+				payload,
+			});
+		});
+	}
+
 	async waitForHandshake(options: unknown = {}): Promise<HandshakeResult> {
 		const parsed = this.parseHandshakeOptions(options);
 		const terminalTimeoutMs = this.resolveHandshakeTimeout(
@@ -839,6 +1020,30 @@ export class TerminalManager implements vscode.Disposable {
 		);
 	}
 
+	async sampleTrailingCells(
+		options: unknown = {},
+	): Promise<TestSampleTrailingCellsResult> {
+		const parsed = this.parseTestSampleTrailingCellsOptions(options);
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const timeoutMs = this.resolveHandshakeTimeout(parsed.timeoutMs, 3000);
+		const count = parsed.count ?? 8;
+		return await this.requestTestSampleTrailingCells(
+			terminalId,
+			count,
+			timeoutMs,
+		);
+	}
+
+	async directWriteTest(options: unknown = {}): Promise<void> {
+		const parsed = this.parseTestDirectWriteOptions(options);
+		if (!parsed.payload) {
+			throw new Error("Test direct-write requires a payload string.");
+		}
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const timeoutMs = this.resolveHandshakeTimeout(parsed.timeoutMs, 3000);
+		await this.requestTestDirectWrite(terminalId, parsed.payload, timeoutMs);
+	}
+
 	sendTestInput(options: unknown = {}): void {
 		const parsed = this.parseTestSendInputOptions(options);
 		if (!parsed.data) {
@@ -866,6 +1071,25 @@ export class TerminalManager implements vscode.Disposable {
 			terminalId,
 			keys: parsed.keys,
 		});
+	}
+
+	activatePanelTerminal(options: unknown = {}): void {
+		const parsed = this.parseTestActivateTerminalOptions(options);
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			throw new Error(`Terminal ${terminalId} no longer exists.`);
+		}
+		if (instance.location !== "panel") {
+			throw new Error("Activate terminal only supports panel terminals.");
+		}
+		this.panelProvider.activateTerminal(terminalId);
+	}
+
+	destroyTestTerminal(options: unknown = {}): void {
+		const parsed = this.parseTestActivateTerminalOptions(options);
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		this.destroyTerminalById(terminalId);
 	}
 
 	private parseBenchmarkOptions(input: unknown): BenchmarkOptions {
@@ -2357,6 +2581,22 @@ export class TerminalManager implements vscode.Disposable {
 				if (watcher) {
 					this.testSearchWatchers.delete(message.token);
 					watcher.resolve(message.state);
+				}
+				break;
+			}
+			case "test-sample-trailing-cells-result": {
+				const watcher = this.testSampleTrailingCellsWatchers.get(message.token);
+				if (watcher) {
+					this.testSampleTrailingCellsWatchers.delete(message.token);
+					watcher.resolve(message.result);
+				}
+				break;
+			}
+			case "test-direct-write-result": {
+				const watcher = this.testDirectWriteWatchers.get(message.token);
+				if (watcher) {
+					this.testDirectWriteWatchers.delete(message.token);
+					watcher.resolve();
 				}
 				break;
 			}

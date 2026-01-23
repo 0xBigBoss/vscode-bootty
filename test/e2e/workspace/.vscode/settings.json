@@ -1,0 +1,4 @@
+{
+    "bootty.defaultTerminalLocation": "editor",
+    "bootty.renderer": "canvas"
+}

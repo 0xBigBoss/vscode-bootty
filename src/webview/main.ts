@@ -36,6 +36,8 @@ import type {
 	RendererType,
 	RuntimeConfig,
 	TerminalTheme,
+	TestSampleCell,
+	TestSampleTrailingCellsResult,
 } from "../types/messages";
 import type { TerminalId } from "../types/terminal";
 // Import modular components
@@ -48,6 +50,143 @@ import type { RendererResult } from "./renderer-utils";
 import { createRenderer } from "./renderer-utils";
 import { createSearchController } from "./search-controller";
 import { createThemeObserver, getVSCodeThemeColors } from "./theme-utils";
+
+const logPty = debug("bootty:webview:pty");
+const logInput = debug("bootty:webview:input");
+
+const utf8Decoder = new TextDecoder("utf-8");
+function previewBytes(bytes: Uint8Array, limit = 256): string {
+	if (bytes.length <= limit) {
+		const text = utf8Decoder.decode(bytes);
+		const hex = Array.from(bytes)
+			.map((b) => b.toString(16).padStart(2, "0"))
+			.join(" ");
+		return `len=${bytes.length} text=${JSON.stringify(text)} hex=${hex}`;
+	}
+	const head = bytes.subarray(0, limit);
+	const tail = bytes.subarray(bytes.length - limit);
+	const headText = utf8Decoder.decode(head);
+	const tailText = utf8Decoder.decode(tail);
+	const headHex = Array.from(head)
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join(" ");
+	const tailHex = Array.from(tail)
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join(" ");
+	return `len=${bytes.length} head=${JSON.stringify(headText)} headHex=${headHex} tail=${JSON.stringify(tailText)} tailHex=${tailHex}`;
+}
+
+function computeCellHasInk(data: Uint8ClampedArray): boolean {
+	const buckets = new Map<
+		number,
+		{ count: number; r: number; g: number; b: number }
+	>();
+	let maxKey = 0;
+	let maxCount = 0;
+	for (let i = 0; i < data.length; i += 4) {
+		const a = data[i + 3];
+		if (a < 16) continue;
+		const r = data[i];
+		const g = data[i + 1];
+		const b = data[i + 2];
+		const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+		const entry = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0 };
+		entry.count += 1;
+		entry.r += r;
+		entry.g += g;
+		entry.b += b;
+		buckets.set(key, entry);
+		if (entry.count > maxCount) {
+			maxCount = entry.count;
+			maxKey = key;
+		}
+	}
+	if (maxCount === 0) return false;
+	const bgEntry = buckets.get(maxKey);
+	if (!bgEntry) return false;
+	const bgR = bgEntry.r / bgEntry.count;
+	const bgG = bgEntry.g / bgEntry.count;
+	const bgB = bgEntry.b / bgEntry.count;
+	const threshold = 40;
+	for (let i = 0; i < data.length; i += 4) {
+		const a = data[i + 3];
+		if (a < 16) continue;
+		const r = data[i];
+		const g = data[i + 1];
+		const b = data[i + 2];
+		const diff = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+		if (diff > threshold) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function sampleTrailingCells(
+	term: unknown,
+	count: number,
+): TestSampleTrailingCellsResult {
+	const termApi = term as {
+		cols: number;
+		rows: number;
+		renderer?: {
+			getCanvas: () => HTMLCanvasElement;
+			getMetrics: () => { width: number; height: number };
+		};
+		wasmTerm?: {
+			getCursor: () => { x: number; y: number };
+			getLine: (row: number) => Array<{ codepoint: number }> | null;
+		};
+	};
+	const renderer = termApi.renderer;
+	if (!renderer) {
+		return { cursorX: 0, cursorY: 0, cells: [], error: "renderer-unavailable" };
+	}
+	const canvas = renderer.getCanvas();
+	const ctx = canvas.getContext("2d", { willReadFrequently: true });
+	if (!ctx) {
+		return {
+			cursorX: 0,
+			cursorY: 0,
+			cells: [],
+			error: "canvas-2d-unavailable",
+		};
+	}
+	const wasm = termApi.wasmTerm;
+	if (!wasm) {
+		return { cursorX: 0, cursorY: 0, cells: [], error: "wasm-unavailable" };
+	}
+	const cursor = wasm.getCursor();
+	const row = cursor.y;
+	const cols = Math.max(0, termApi.cols);
+	const metrics = renderer.getMetrics();
+	if (!cols || !metrics.width || !metrics.height) {
+		return {
+			cursorX: cursor.x,
+			cursorY: cursor.y,
+			cells: [],
+			error: "metrics-unavailable",
+		};
+	}
+	const dpr = canvas.width / (cols * metrics.width);
+	const startCol = Math.max(0, cursor.x - count);
+	const endCol = Math.max(startCol, cursor.x);
+	const line = wasm.getLine(row) ?? [];
+	const cells: TestSampleCell[] = [];
+	for (let col = startCol; col < endCol; col += 1) {
+		const cell = line[col];
+		const codepoint = cell?.codepoint ?? 0;
+		const char = codepoint ? String.fromCodePoint(codepoint) : "";
+		const cellX = Math.floor(col * metrics.width * dpr);
+		const cellY = Math.floor(row * metrics.height * dpr);
+		const cellW = Math.max(1, Math.floor(metrics.width * dpr));
+		const cellH = Math.max(1, Math.floor(metrics.height * dpr));
+		const image = ctx.getImageData(cellX, cellY, cellW, cellH);
+		const hasInk = computeCellHasInk(image.data);
+		cells.push({ col, codepoint, char, hasInk });
+	}
+	return { cursorX: cursor.x, cursorY: cursor.y, cells };
+}
 
 // Declare VS Code API (provided by webview host)
 declare function acquireVsCodeApi(): {
@@ -679,6 +818,14 @@ const boottyInit = async (): Promise<void> => {
 
 		const output = msg.output;
 		if (output.byteLength > 0) {
+			logPty(
+				"drain-result drainedBytes=%d drainedLines=%d queueBytesBefore=%d queueBytesAfter=%d output=%s",
+				msg.drainedBytes,
+				msg.drainedLines,
+				msg.queueBytesBefore,
+				msg.queueBytesAfter,
+				previewBytes(output),
+			);
 			const termApi = term as unknown as {
 				getViewportY?: () => number;
 				getScrollbackLength?: () => number;
@@ -692,6 +839,7 @@ const boottyInit = async (): Promise<void> => {
 				scrollRafScrollbackBefore = termApi.getScrollbackLength?.() ?? 0;
 			}
 			const writeStart = profileCollector.startSpan();
+			logPty("pty-write %s", previewBytes(output));
 			term.write(output);
 			profileCollector.recordDuration("bootty:webview:pty-write", writeStart, {
 				bytes: output.byteLength,
@@ -1073,6 +1221,29 @@ const boottyInit = async (): Promise<void> => {
 				});
 				break;
 			}
+			case "test-sample-trailing-cells": {
+				requestAnimationFrame(() => {
+					const result = sampleTrailingCells(term, Math.max(1, msg.count));
+					vscode.postMessage({
+						type: "test-sample-trailing-cells-result",
+						terminalId: TERMINAL_ID,
+						token: msg.token,
+						result,
+					});
+				});
+				break;
+			}
+			case "test-direct-write": {
+				term.write(msg.payload);
+				requestAnimationFrame(() => {
+					vscode.postMessage({
+						type: "test-direct-write-result",
+						terminalId: TERMINAL_ID,
+						token: msg.token,
+					});
+				});
+				break;
+			}
 			case "pty-data": {
 				if (msg.data.byteLength > 0) {
 					pendingPtyMerge.push(msg.data);
@@ -1146,6 +1317,9 @@ const boottyInit = async (): Promise<void> => {
 				}
 				if (msg.settings.fontSize !== undefined) {
 					term.options.fontSize = msg.settings.fontSize;
+				}
+				if (msg.settings.cursorStyle !== undefined) {
+					term.options.cursorStyle = msg.settings.cursorStyle;
 				}
 				// Recalculate dimensions after font change and notify PTY
 				if (safeFit()) {
@@ -1277,6 +1451,12 @@ const boottyInit = async (): Promise<void> => {
 
 	// Send input to PTY
 	term.onData((data: string) => {
+		logInput(
+			"terminal-input terminal=%s len=%d data=%s",
+			TERMINAL_ID,
+			data.length,
+			JSON.stringify(data),
+		);
 		vscode.postMessage({
 			type: "terminal-input",
 			terminalId: TERMINAL_ID,

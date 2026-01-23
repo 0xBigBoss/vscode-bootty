@@ -17,6 +17,13 @@ async function main() {
       "--disable-workspace-trust",
       `--user-data-dir=${userDataDir}`,
     ];
+    const swiftshaderSetting = process.env.BOOTTY_E2E_SWIFTSHADER;
+    const enableSwiftshader =
+      swiftshaderSetting === "1" ||
+      (swiftshaderSetting !== "0" && process.platform === "linux");
+    if (enableSwiftshader) {
+      launchArgs.push("--enable-unsafe-swiftshader");
+    }
     if (process.env.BOOTTY_E2E_DISABLE_GPU === "1") {
       launchArgs.push("--disable-gpu");
     }

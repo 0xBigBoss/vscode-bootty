@@ -23,7 +23,15 @@ export function resolveDisplaySettings(config: ConfigGetter): DisplaySettings {
 		config.get<number>("editor", "fontSize") ||
 		15;
 
-	return { fontFamily, fontSize };
+	const rawCursorStyle = config.get<string>("bootty", "cursorStyle");
+	const cursorStyle =
+		rawCursorStyle === "block" ||
+		rawCursorStyle === "underline" ||
+		rawCursorStyle === "bar"
+			? rawCursorStyle
+			: "block";
+
+	return { fontFamily, fontSize, cursorStyle };
 }
 
 /**

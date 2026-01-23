@@ -111,4 +111,36 @@ describe("resolveDisplaySettings", () => {
 			expect(settings.fontSize).toBe(18);
 		});
 	});
+
+	describe("cursorStyle", () => {
+		it("uses bootty.cursorStyle when valid", () => {
+			const config = createMockConfig({
+				bootty: { cursorStyle: "bar" },
+				editor: {},
+			});
+
+			const settings = resolveDisplaySettings(config);
+			expect(settings.cursorStyle).toBe("bar");
+		});
+
+		it("falls back to block when unset", () => {
+			const config = createMockConfig({
+				bootty: {},
+				editor: {},
+			});
+
+			const settings = resolveDisplaySettings(config);
+			expect(settings.cursorStyle).toBe("block");
+		});
+
+		it("falls back to block when invalid", () => {
+			const config = createMockConfig({
+				bootty: { cursorStyle: "weird" },
+				editor: {},
+			});
+
+			const settings = resolveDisplaySettings(config);
+			expect(settings.cursorStyle).toBe("block");
+		});
+	});
 });

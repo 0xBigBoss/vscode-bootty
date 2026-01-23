@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { BooTTYPanelViewProvider } from "./panel-view-provider";
 import { TerminalManager } from "./terminal-manager";
-import type { TerminalLocation } from "./types/terminal";
+import type { TerminalId, TerminalLocation } from "./types/terminal";
 
 let manager: TerminalManager | undefined;
 let panelProvider: BooTTYPanelViewProvider | undefined;
@@ -338,6 +338,24 @@ export function activate(context: vscode.ExtensionContext) {
 			},
 		),
 		vscode.commands.registerCommand(
+			"bootty.test.activatePanelTerminal",
+			(options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				manager.activatePanelTerminal(options);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.test.destroyTerminal",
+			(options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				manager.destroyTestTerminal(options);
+			},
+		),
+		vscode.commands.registerCommand(
 			"bootty.test.findFileLinks",
 			async (options?: unknown) => {
 				if (!manager) {
@@ -353,6 +371,45 @@ export function activate(context: vscode.ExtensionContext) {
 					throw new Error("BooTTY: Terminal manager not initialized.");
 				}
 				return await manager.testSearch(options);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.test.sampleTrailingCells",
+			async (options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				return await manager.sampleTrailingCells(options);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.test.directWrite",
+			async (options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				return await manager.directWriteTest(options);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.test.getRendererInfo",
+			(options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				const raw = options && typeof options === "object" ? options : {};
+				const terminalId =
+					typeof (raw as Record<string, unknown>).terminalId === "string"
+						? ((raw as Record<string, unknown>).terminalId as TerminalId)
+						: undefined;
+				const info = manager.getRendererInfo();
+				if (terminalId) {
+					return info.get(terminalId) ?? null;
+				}
+				return Array.from(info.entries()).map(([id, entry]) => ({
+					terminalId: id,
+					...entry,
+				}));
 			},
 		),
 		vscode.commands.registerCommand("bootty.test.getPanelTerminalIds", () => {

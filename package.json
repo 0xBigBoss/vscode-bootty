@@ -157,6 +157,16 @@
 					"maximum": 72,
 					"description": "Font size in pixels. Set to 0 to use editor.fontSize."
 				},
+				"bootty.cursorStyle": {
+					"type": "string",
+					"enum": [
+						"block",
+						"underline",
+						"bar"
+					],
+					"default": "block",
+					"description": "Cursor style for BooTTY."
+				},
 				"bootty.scrollback": {
 					"type": "number",
 					"default": 0,
