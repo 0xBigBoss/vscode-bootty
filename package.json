@@ -234,6 +234,18 @@
 					"minimum": 0,
 					"description": "Optional byte budget for PTY draining per animation frame. Set to 0 to disable. When set, PTY drain stops once the budget is exceeded, even if maxLinesPerFrame allows more."
 				},
+				"bootty.pty.flushFastPathBytes": {
+					"type": "number",
+					"default": 4096,
+					"minimum": 0,
+					"description": "Use a microtask flush when the PTY queue byte size is at or below this threshold. Set to 0 to disable the fast path."
+				},
+				"bootty.pty.flushFastPathSegments": {
+					"type": "number",
+					"default": 4,
+					"minimum": 0,
+					"description": "Use a microtask flush when the PTY queue segment count is at or below this threshold. Set to 0 to disable the fast path."
+				},
 				"bootty.pty.adaptiveDrain": {
 					"type": "boolean",
 					"default": true,

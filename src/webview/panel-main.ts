@@ -286,6 +286,7 @@ const boottyPanelInit = async (): Promise<void> => {
 			mergeScheduled: boolean;
 			mergeChunks: Uint8Array[];
 			mergeBytes: number;
+			suppressPty: boolean;
 		}
 	>();
 	const adaptiveMaxLinesByTerminal = new Map<TerminalId, number>();
@@ -632,6 +633,7 @@ const boottyPanelInit = async (): Promise<void> => {
 		mergeScheduled: boolean;
 		mergeChunks: Uint8Array[];
 		mergeBytes: number;
+		suppressPty: boolean;
 	} {
 		let state = ptyQueueState.get(id);
 		if (!state) {
@@ -648,10 +650,44 @@ const boottyPanelInit = async (): Promise<void> => {
 				mergeScheduled: false,
 				mergeChunks: [],
 				mergeBytes: 0,
+				suppressPty: false,
 			};
 			ptyQueueState.set(id, state);
 		}
 		return state;
+	}
+
+	type PtyQueueState = ReturnType<typeof getPtyQueueState>;
+
+	function shouldUseFastPtyFlush(state: PtyQueueState): boolean {
+		const maxBytes = runtimeConfig.ptyFlushFastPathBytes ?? 0;
+		const maxSegments = runtimeConfig.ptyFlushFastPathSegments ?? 0;
+		if (maxBytes <= 0 && maxSegments <= 0) return false;
+		const totalBytes = state.bytes + state.pendingBytes + state.mergeBytes;
+		const totalSegments =
+			state.segments + state.pendingSegments + state.mergeChunks.length;
+		const bytesOk = maxBytes <= 0 || totalBytes <= maxBytes;
+		const segmentsOk = maxSegments <= 0 || totalSegments <= maxSegments;
+		return bytesOk && segmentsOk;
+	}
+
+	function isPtyQueueIdle(state: PtyQueueState): boolean {
+		if (state.mergeScheduled) return false;
+		if (state.pending) return false;
+		if (state.drainInFlight) return false;
+		if (state.bytes > 0 || state.segments > 0) return false;
+		if (state.pendingBytes > 0 || state.pendingSegments > 0) return false;
+		if (state.mergeBytes > 0 || state.mergeChunks.length > 0) return false;
+		return true;
+	}
+
+	function waitForPtyIdle(terminalId: TerminalId, onIdle: () => void): void {
+		const state = getPtyQueueState(terminalId);
+		if (isPtyQueueIdle(state)) {
+			onIdle();
+			return;
+		}
+		requestAnimationFrame(() => waitForPtyIdle(terminalId, onIdle));
 	}
 
 	function dispatchTestKeyEvents(
@@ -780,10 +816,16 @@ const boottyPanelInit = async (): Promise<void> => {
 		const state = getPtyQueueState(id);
 		if (state.pending) return;
 		state.pending = true;
-		requestAnimationFrame(() => {
+		const useFastPath = shouldUseFastPtyFlush(state);
+		const runFlush = () => {
 			state.pending = false;
 			flushPtyQueue(id);
-		});
+		};
+		if (useFastPath) {
+			queueMicrotask(runFlush);
+		} else {
+			requestAnimationFrame(runFlush);
+		}
 	}
 
 	function startDirectWrite(
@@ -975,6 +1017,8 @@ const boottyPanelInit = async (): Promise<void> => {
 		ptyAdaptiveMinBytesPerFrame: 0,
 		ptyAdaptiveQueueBytesThreshold: 0,
 		ptyAdaptiveQueueHysteresisRatio: 0,
+		ptyFlushFastPathBytes: 0,
+		ptyFlushFastPathSegments: 0,
 	};
 	let runtimeConfigUpdated = false;
 
@@ -2247,6 +2291,8 @@ const boottyPanelInit = async (): Promise<void> => {
 							terminal.term,
 							Math.max(1, msg.count),
 						);
+						const state = getPtyQueueState(msg.terminalId);
+						state.suppressPty = false;
 						vscode.postMessage({
 							type: "test-sample-trailing-cells-result",
 							terminalId: msg.terminalId,
@@ -2261,12 +2307,16 @@ const boottyPanelInit = async (): Promise<void> => {
 				const terminal = terminals.get(msg.terminalId);
 				if (terminal) {
 					const term = terminal.term as { write: (data: string) => void };
-					term.write(msg.payload);
-					requestAnimationFrame(() => {
-						vscode.postMessage({
-							type: "test-direct-write-result",
-							terminalId: msg.terminalId,
-							token: msg.token,
+					waitForPtyIdle(msg.terminalId, () => {
+						const state = getPtyQueueState(msg.terminalId);
+						state.suppressPty = true;
+						term.write(msg.payload);
+						requestAnimationFrame(() => {
+							vscode.postMessage({
+								type: "test-direct-write-result",
+								terminalId: msg.terminalId,
+								token: msg.token,
+							});
 						});
 					});
 				}
@@ -2282,6 +2332,7 @@ const boottyPanelInit = async (): Promise<void> => {
 				if (terminal) {
 					if (msg.data.byteLength > 0) {
 						const state = getPtyQueueState(msg.terminalId);
+						if (state.suppressPty) break;
 						state.mergeChunks.push(msg.data);
 						state.mergeBytes += msg.data.byteLength;
 						if (!state.mergeScheduled) {

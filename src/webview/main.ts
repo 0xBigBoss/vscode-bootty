@@ -273,6 +273,8 @@ const boottyInit = async (): Promise<void> => {
 		ptyAdaptiveMinBytesPerFrame: 0,
 		ptyAdaptiveQueueBytesThreshold: 0,
 		ptyAdaptiveQueueHysteresisRatio: 0,
+		ptyFlushFastPathBytes: 0,
+		ptyFlushFastPathSegments: 0,
 	};
 	let runtimeConfigUpdated = false;
 	let adaptiveMaxLines: number | null = null;
@@ -702,6 +704,7 @@ const boottyInit = async (): Promise<void> => {
 	let ptyDrainInFlight = false;
 	let ptyDrainQueued = false;
 	let ptyMergeScheduled = false;
+	let suppressPtyDuringDirectWrite = false;
 	const pendingPtyChunks: Uint8Array[] = [];
 	let pendingPtyBytes = 0;
 	let pendingPtySegments = 0;
@@ -1023,13 +1026,49 @@ const boottyInit = async (): Promise<void> => {
 		schedulePtyFlush();
 	}
 
+	function shouldUseFastPtyFlush(): boolean {
+		const maxBytes = runtimeConfig.ptyFlushFastPathBytes ?? 0;
+		const maxSegments = runtimeConfig.ptyFlushFastPathSegments ?? 0;
+		if (maxBytes <= 0 && maxSegments <= 0) return false;
+		const totalBytes = ptyQueueBytes + pendingPtyBytes + pendingPtyMergeBytes;
+		const totalSegments =
+			ptyQueueSegments + pendingPtySegments + pendingPtyMerge.length;
+		const bytesOk = maxBytes <= 0 || totalBytes <= maxBytes;
+		const segmentsOk = maxSegments <= 0 || totalSegments <= maxSegments;
+		return bytesOk && segmentsOk;
+	}
+
+	function isPtyQueueIdle(): boolean {
+		if (ptyMergeScheduled) return false;
+		if (ptyFlushPending) return false;
+		if (ptyDrainInFlight) return false;
+		if (ptyQueueBytes > 0 || ptyQueueSegments > 0) return false;
+		if (pendingPtyBytes > 0 || pendingPtySegments > 0) return false;
+		if (pendingPtyMergeBytes > 0 || pendingPtyMerge.length > 0) return false;
+		return true;
+	}
+
+	function waitForPtyIdle(onIdle: () => void): void {
+		if (isPtyQueueIdle()) {
+			onIdle();
+			return;
+		}
+		requestAnimationFrame(() => waitForPtyIdle(onIdle));
+	}
+
 	function schedulePtyFlush(): void {
 		if (ptyFlushPending) return;
 		ptyFlushPending = true;
-		requestAnimationFrame(() => {
+		const useFastPath = shouldUseFastPtyFlush();
+		const runFlush = () => {
 			ptyFlushPending = false;
 			flushPtyQueue();
-		});
+		};
+		if (useFastPath) {
+			queueMicrotask(runFlush);
+		} else {
+			requestAnimationFrame(runFlush);
+		}
 	}
 
 	function scheduleBenchDrain(token: string): void {
@@ -1224,6 +1263,7 @@ const boottyInit = async (): Promise<void> => {
 			case "test-sample-trailing-cells": {
 				requestAnimationFrame(() => {
 					const result = sampleTrailingCells(term, Math.max(1, msg.count));
+					suppressPtyDuringDirectWrite = false;
 					vscode.postMessage({
 						type: "test-sample-trailing-cells-result",
 						terminalId: TERMINAL_ID,
@@ -1234,18 +1274,22 @@ const boottyInit = async (): Promise<void> => {
 				break;
 			}
 			case "test-direct-write": {
-				term.write(msg.payload);
-				requestAnimationFrame(() => {
-					vscode.postMessage({
-						type: "test-direct-write-result",
-						terminalId: TERMINAL_ID,
-						token: msg.token,
+				waitForPtyIdle(() => {
+					suppressPtyDuringDirectWrite = true;
+					term.write(msg.payload);
+					requestAnimationFrame(() => {
+						vscode.postMessage({
+							type: "test-direct-write-result",
+							terminalId: TERMINAL_ID,
+							token: msg.token,
+						});
 					});
 				});
 				break;
 			}
 			case "pty-data": {
 				if (msg.data.byteLength > 0) {
+					if (suppressPtyDuringDirectWrite) break;
 					pendingPtyMerge.push(msg.data);
 					pendingPtyMergeBytes += msg.data.byteLength;
 					if (!ptyMergeScheduled) {

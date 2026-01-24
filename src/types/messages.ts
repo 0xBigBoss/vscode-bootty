@@ -44,6 +44,8 @@ export interface RuntimeConfig {
 	ptyAdaptiveMinBytesPerFrame: number;
 	ptyAdaptiveQueueBytesThreshold: number;
 	ptyAdaptiveQueueHysteresisRatio: number;
+	ptyFlushFastPathBytes: number;
+	ptyFlushFastPathSegments: number;
 }
 
 /** Terminal theme colors */
