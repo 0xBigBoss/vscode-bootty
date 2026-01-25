@@ -63,6 +63,12 @@ async function build() {
 		} catch {
 			// Ignore if doesn't exist or can't remove
 		}
+		// Recreate with permissive mode for multi-user environments
+		try {
+			await fs.promises.mkdir(outDir, { recursive: true, mode: 0o777 });
+		} catch {
+			// Ignore if already exists
+		}
 
 		// Build extension
 		if (isWatch) {
