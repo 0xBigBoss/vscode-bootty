@@ -133,7 +133,16 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	postMessage(message: PanelExtensionMessage): void {
 		const isTestMessage =
 			typeof message.type === "string" && message.type.startsWith("test-");
-		if (this._isReady && this._view && (this._view.visible || isTestMessage)) {
+		// PTY data/exit messages must be delivered immediately regardless of visibility
+		// to prevent terminal output from being delayed or lost when the panel is hidden
+		const isPtyMessage =
+			message.type === "pty-data" || message.type === "pty-exit";
+		const sendImmediately = isTestMessage || isPtyMessage;
+		if (
+			this._isReady &&
+			this._view &&
+			(this._view.visible || sendImmediately)
+		) {
 			this._view.webview.postMessage(message);
 		} else {
 			this._messageQueue.push(message);
