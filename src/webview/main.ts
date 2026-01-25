@@ -273,8 +273,6 @@ const boottyInit = async (): Promise<void> => {
 		ptyAdaptiveMinBytesPerFrame: 0,
 		ptyAdaptiveQueueBytesThreshold: 0,
 		ptyAdaptiveQueueHysteresisRatio: 0,
-		ptyFlushFastPathBytes: 0,
-		ptyFlushFastPathSegments: 0,
 	};
 	let runtimeConfigUpdated = false;
 	let adaptiveMaxLines: number | null = null;
@@ -1027,15 +1025,8 @@ const boottyInit = async (): Promise<void> => {
 	}
 
 	function shouldUseFastPtyFlush(): boolean {
-		const maxBytes = runtimeConfig.ptyFlushFastPathBytes ?? 0;
-		const maxSegments = runtimeConfig.ptyFlushFastPathSegments ?? 0;
-		if (maxBytes <= 0 && maxSegments <= 0) return false;
-		const totalBytes = ptyQueueBytes + pendingPtyBytes + pendingPtyMergeBytes;
-		const totalSegments =
-			ptyQueueSegments + pendingPtySegments + pendingPtyMerge.length;
-		const bytesOk = maxBytes <= 0 || totalBytes <= maxBytes;
-		const segmentsOk = maxSegments <= 0 || totalSegments <= maxSegments;
-		return bytesOk && segmentsOk;
+		// Fast path disabled - always use normal drain worker flow
+		return false;
 	}
 
 	function isPtyQueueIdle(): boolean {

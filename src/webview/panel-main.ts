@@ -659,16 +659,9 @@ const boottyPanelInit = async (): Promise<void> => {
 
 	type PtyQueueState = ReturnType<typeof getPtyQueueState>;
 
-	function shouldUseFastPtyFlush(state: PtyQueueState): boolean {
-		const maxBytes = runtimeConfig.ptyFlushFastPathBytes ?? 0;
-		const maxSegments = runtimeConfig.ptyFlushFastPathSegments ?? 0;
-		if (maxBytes <= 0 && maxSegments <= 0) return false;
-		const totalBytes = state.bytes + state.pendingBytes + state.mergeBytes;
-		const totalSegments =
-			state.segments + state.pendingSegments + state.mergeChunks.length;
-		const bytesOk = maxBytes <= 0 || totalBytes <= maxBytes;
-		const segmentsOk = maxSegments <= 0 || totalSegments <= maxSegments;
-		return bytesOk && segmentsOk;
+	function shouldUseFastPtyFlush(_state: PtyQueueState): boolean {
+		// Fast path disabled - always use normal drain worker flow
+		return false;
 	}
 
 	function isPtyQueueIdle(state: PtyQueueState): boolean {
@@ -1017,8 +1010,6 @@ const boottyPanelInit = async (): Promise<void> => {
 		ptyAdaptiveMinBytesPerFrame: 0,
 		ptyAdaptiveQueueBytesThreshold: 0,
 		ptyAdaptiveQueueHysteresisRatio: 0,
-		ptyFlushFastPathBytes: 0,
-		ptyFlushFastPathSegments: 0,
 	};
 	let runtimeConfigUpdated = false;
 

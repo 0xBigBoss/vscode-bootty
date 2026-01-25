@@ -1840,14 +1840,6 @@ export class TerminalManager implements vscode.Disposable {
 			0,
 			config.get<number>("pty.adaptiveQueueHysteresisRatio") ?? 0,
 		);
-		const ptyFlushFastPathBytes = Math.max(
-			0,
-			Math.floor(config.get<number>("pty.flushFastPathBytes") ?? 0),
-		);
-		const ptyFlushFastPathSegments = Math.max(
-			0,
-			Math.floor(config.get<number>("pty.flushFastPathSegments") ?? 0),
-		);
 		const base = {
 			bellStyle,
 			renderer,
@@ -1864,8 +1856,6 @@ export class TerminalManager implements vscode.Disposable {
 			ptyAdaptiveMinBytesPerFrame,
 			ptyAdaptiveQueueBytesThreshold,
 			ptyAdaptiveQueueHysteresisRatio,
-			ptyFlushFastPathBytes,
-			ptyFlushFastPathSegments,
 		};
 		if (this.runtimeConfigOverride) {
 			return { ...base, ...this.runtimeConfigOverride };
