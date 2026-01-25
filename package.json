@@ -34,6 +34,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:e2e": "npm run build && node scripts/run-e2e.mjs",
+		"test:e2e-render-compare": "npm run test:e2e",
 		"build:native": "node scripts/build-native.mjs",
 		"bench:e2e": "npm -C ../packages/ghostty-web run build && npm -C ../packages/libghostty-webgl run build && npm run build && node scripts/run-bench-e2e.mjs",
 		"bench:analyze": "node scripts/analyze-profile.mjs",
