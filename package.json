@@ -133,6 +133,10 @@
 			{
 				"command": "bootty.toggleDebugLog",
 				"title": "BooTTY: Toggle Debug Logging"
+			},
+			{
+				"command": "bootty.togglePtyCapture",
+				"title": "BooTTY: Toggle PTY Capture"
 			}
 		],
 		"menus": {
@@ -415,6 +419,7 @@
 		"onCommand:bootty.toggleDebugLog",
 		"onCommand:bootty.togglePanel",
 		"onCommand:bootty.toggleProfiling",
+		"onCommand:bootty.togglePtyCapture",
 		"onView:boottyTerminalPanel"
 	],
 	"extensionKind": [

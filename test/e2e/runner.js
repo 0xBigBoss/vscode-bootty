@@ -544,6 +544,76 @@ async function run() {
       );
     }
 
+    const backspaceCases = [
+      {
+        name: "backspace-basic",
+        payload: "AB\bC",
+        expected: "AC",
+        sampleLen: 2,
+      },
+      {
+        name: "backspace-multi",
+        payload: "ABC\b\bDE",
+        expected: "ADE",
+        sampleLen: 3,
+      },
+      {
+        name: "backspace-start",
+        payload: "\bA",
+        expected: "A",
+        sampleLen: 1,
+      },
+      {
+        name: "backspace-sgr",
+        payload: "AB\b\x1b[31mC\x1b[0m",
+        expected: "AC",
+        sampleLen: 2,
+      },
+    ];
+
+    for (const testCase of backspaceCases) {
+      const sampleLen = testCase.sampleLen;
+      const backspacePayload = [
+        "\x1b[2J\x1b[H",
+        testCase.payload,
+        "\x1b[H",
+        `\x1b[${sampleLen}C`,
+      ].join("");
+      await directWrite(directTerminalId, backspacePayload, READY_TIMEOUT_MS);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const backspaceSample = await sampleTrailingCells(
+        directTerminalId,
+        sampleLen,
+        READY_TIMEOUT_MS,
+      );
+      assert.ok(
+        !backspaceSample?.error,
+        backspaceSample?.error ?? `${testCase.name} sample error`,
+      );
+      assert.equal(
+        backspaceSample.cells.length,
+        sampleLen,
+        `${testCase.name} sample length mismatch`,
+      );
+      const backspaceText = backspaceSample.cells
+        .map((cell) => cell.char)
+        .join("");
+      assert.equal(
+        backspaceText,
+        testCase.expected,
+        `${testCase.name} text mismatch`,
+      );
+      for (const cell of backspaceSample.cells) {
+        if (cell.char && cell.char !== " ") {
+          assert.equal(
+            cell.hasInk,
+            true,
+            `Expected ink for col ${cell.col} char ${cell.char} (${testCase.name})`,
+          );
+        }
+      }
+    }
+
     const zshExpected = "echo hello world";
     const zshPayload = [
       "\x1b[2J\x1b[H",
@@ -585,6 +655,52 @@ async function run() {
           cell.hasInk,
           true,
           `Expected ink for col ${cell.col} char ${cell.char}`,
+        );
+      }
+    }
+
+    // Test zsh autosuggestion backspace sequences (from real PTY capture)
+    // This exercises the normalizeBackspace fix - zsh sends raw backspaces
+    // which must be converted to CSI cursor left for correct rendering
+    const zshAutoExpected = "echo hello world";
+    const zshAutoPayload = [
+      "\x1b[2J\x1b[H", // Clear screen, cursor home
+      // Simulates typing "e" then zsh redraws with autosuggestion
+      "e",
+      "\b", // backspace - zsh erases to redraw with color
+      "\x1b[1m\x1b[31me\x1b[0m\x1b[39m", // bold red "e"
+      "\b", // backspace again for another redraw cycle
+      "\x1b[1m\x1b[31me\x1b[0m\x1b[39m", // bold red "e" again
+      "\x1b[90mcho hello world\x1b[39m", // faint gray autosuggestion
+      "\x1b[15D", // cursor back to after "e"
+      // Now accept the autosuggestion (type rest normally)
+      "\b\b\b\b", // multiple backspaces (zsh editing)
+      "\x1b[0m\x1b[32mecho\x1b[39m", // green "echo"
+      " hello world", // rest of text
+      "\x1b[H", // cursor home
+      `\x1b[${zshAutoExpected.length}C`, // move cursor to end
+    ].join("");
+    await directWrite(directTerminalId, zshAutoPayload, READY_TIMEOUT_MS);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const zshAutoSample = await sampleTrailingCells(
+      directTerminalId,
+      zshAutoExpected.length,
+      READY_TIMEOUT_MS,
+    );
+    assert.ok(!zshAutoSample?.error, zshAutoSample?.error ?? "zsh auto sample error");
+    assert.equal(
+      zshAutoSample.cells.length,
+      zshAutoExpected.length,
+      "Expected zsh auto sample length",
+    );
+    const zshAutoText = zshAutoSample.cells.map((cell) => cell.char).join("");
+    assert.equal(zshAutoText, zshAutoExpected, "Zsh autosuggestion backspace handling mismatch");
+    for (const cell of zshAutoSample.cells) {
+      if (cell.char && cell.char !== " ") {
+        assert.equal(
+          cell.hasInk,
+          true,
+          `Expected ink for col ${cell.col} char ${cell.char} (zsh auto test)`,
         );
       }
     }

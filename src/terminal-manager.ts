@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
@@ -387,6 +388,11 @@ export class TerminalManager implements vscode.Disposable {
 		maxBytes: number;
 		maxDelayMs: number;
 	};
+	// PTY capture for debugging - toggle via bootty.togglePtyCapture command
+	private ptyCaptureEnabled = false;
+	private ptyCaptureStream?: fs.WriteStream;
+	private ptyCapturePath?: string;
+	private ptyCaptureStartTime?: number;
 
 	constructor(
 		context: vscode.ExtensionContext,
@@ -2858,6 +2864,9 @@ export class TerminalManager implements vscode.Disposable {
 		const instance = this.terminals.get(id);
 		if (!instance) return;
 
+		// PTY capture for debugging zsh escape sequences
+		this.capturePtyData(id, data);
+
 		const payload = typeof data === "string" ? this.encodePtyData(data) : data;
 		const needsBenchmark =
 			this.benchmarkWatchers.has(id) || this.benchmarkCommandWatchers.has(id);
@@ -2907,6 +2916,150 @@ export class TerminalManager implements vscode.Disposable {
 		if (needsBenchmark) {
 			this.handleBenchmarkOutput(id, data);
 		}
+	}
+
+	/**
+	 * Toggle PTY capture on/off. When enabled, captures raw PTY bytes to a JSONL file.
+	 * Use bootty.togglePtyCapture command to toggle.
+	 */
+	async togglePtyCapture(): Promise<void> {
+		if (this.ptyCaptureEnabled) {
+			// Stop capture
+			this.stopPtyCapture();
+			vscode.window.showInformationMessage(
+				`BooTTY: PTY capture stopped. Saved to: ${this.ptyCapturePath}`,
+			);
+		} else {
+			// Start capture - save to same location as profiles
+			const captureId = crypto.randomUUID();
+			const captureDir = path.join(
+				this.context.logUri.fsPath,
+				PROFILE_OUTPUT_SUBDIR,
+			);
+			const capturePath = path.join(
+				captureDir,
+				`pty-capture-${captureId}.jsonl`,
+			);
+
+			try {
+				// Ensure directory exists
+				await fs.promises.mkdir(captureDir, { recursive: true });
+
+				this.ptyCaptureStream = fs.createWriteStream(capturePath, {
+					flags: "w",
+					encoding: "utf8",
+				});
+				this.ptyCapturePath = capturePath;
+				this.ptyCaptureStartTime = Date.now();
+				this.ptyCaptureEnabled = true;
+
+				this.ptyCaptureStream.write(
+					JSON.stringify({
+						type: "start",
+						ts: 0,
+						path: capturePath,
+						startTime: new Date().toISOString(),
+					}) + "\n",
+				);
+
+				this.outputChannel.appendLine(
+					`[PTY Capture] Started capturing to ${capturePath}`,
+				);
+				vscode.window.showInformationMessage(
+					`BooTTY: PTY capture started. File: ${capturePath}`,
+				);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				this.outputChannel.appendLine(
+					`[PTY Capture] Failed to open capture file: ${message}`,
+				);
+				vscode.window.showErrorMessage(
+					`BooTTY: Failed to start PTY capture: ${message}`,
+				);
+			}
+		}
+	}
+
+	/**
+	 * Stop PTY capture and close the file.
+	 */
+	private stopPtyCapture(): void {
+		if (this.ptyCaptureStream) {
+			this.ptyCaptureStream.write(
+				JSON.stringify({
+					type: "end",
+					ts: (Date.now() - (this.ptyCaptureStartTime ?? Date.now())) / 1000,
+					endTime: new Date().toISOString(),
+				}) + "\n",
+			);
+			this.ptyCaptureStream.end();
+			this.ptyCaptureStream = undefined;
+		}
+		this.ptyCaptureEnabled = false;
+		this.outputChannel.appendLine(
+			`[PTY Capture] Stopped capturing to ${this.ptyCapturePath}`,
+		);
+	}
+
+	/**
+	 * Capture PTY data to a file for debugging escape sequences.
+	 * Toggle via bootty.togglePtyCapture command.
+	 *
+	 * Output format (JSONL):
+	 * {"ts":123.456,"id":"term-1","hex":"1b5b48","escaped":"\\x1b[H","len":3}
+	 */
+	private capturePtyData(id: TerminalId, data: string | Uint8Array): void {
+		if (!this.ptyCaptureEnabled || !this.ptyCaptureStream) return;
+
+		const ts = (Date.now() - (this.ptyCaptureStartTime ?? Date.now())) / 1000;
+
+		// Convert to bytes
+		const bytes =
+			typeof data === "string"
+				? new TextEncoder().encode(data)
+				: new Uint8Array(data);
+
+		// Create hex representation
+		const hex = Array.from(bytes)
+			.map((b) => b.toString(16).padStart(2, "0"))
+			.join("");
+
+		// Create escaped string representation
+		const escaped = Array.from(bytes)
+			.map((b) => {
+				if (b >= 0x20 && b < 0x7f && b !== 0x5c) {
+					return String.fromCharCode(b);
+				}
+				switch (b) {
+					case 0x07:
+						return "\\a";
+					case 0x08:
+						return "\\b";
+					case 0x09:
+						return "\\t";
+					case 0x0a:
+						return "\\n";
+					case 0x0d:
+						return "\\r";
+					case 0x1b:
+						return "\\x1b";
+					case 0x5c:
+						return "\\\\";
+					default:
+						return `\\x${b.toString(16).padStart(2, "0")}`;
+				}
+			})
+			.join("");
+
+		const record = {
+			ts: Math.round(ts * 1000) / 1000,
+			id,
+			hex,
+			escaped,
+			len: bytes.length,
+		};
+
+		this.ptyCaptureStream.write(JSON.stringify(record) + "\n");
 	}
 
 	private handleTerminalReady(
@@ -4341,6 +4494,12 @@ export class TerminalManager implements vscode.Disposable {
 		}
 		this.terminals.clear();
 		this.ptyService.dispose();
+
+		// Close PTY capture stream if open
+		if (this.ptyCaptureEnabled) {
+			this.stopPtyCapture();
+		}
+
 		this.outputChannel.dispose();
 	}
 }

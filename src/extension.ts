@@ -290,6 +290,14 @@ export function activate(context: vscode.ExtensionContext) {
 			);
 		}),
 
+		// Toggle PTY capture for debugging escape sequences
+		vscode.commands.registerCommand("bootty.togglePtyCapture", async () => {
+			if (!manager) {
+				throw new Error("BooTTY: Terminal manager not initialized.");
+			}
+			await manager.togglePtyCapture();
+		}),
+
 		// Internal: run benchmark scenarios (used by e2e harness)
 		vscode.commands.registerCommand(
 			"bootty.runBenchmark",
