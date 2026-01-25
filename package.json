@@ -21,7 +21,6 @@
 	"scripts": {
 		"vscode:prepublish": "node scripts/check-prebuilds.mjs && npm run build:prod",
 		"compile": "tsgo -p ./",
-		"prebuild": "rm -rf out",
 		"build": "node esbuild.config.mjs",
 		"build:prod": "NODE_ENV=production node esbuild.config.mjs",
 		"dev": "node esbuild.config.mjs --watch",

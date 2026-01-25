@@ -56,6 +56,14 @@ const ptyDrainWorkerConfig = {
 
 async function build() {
 	try {
+		// Clean out directory before build (cross-platform)
+		const outDir = path.join(process.cwd(), "out");
+		try {
+			await fs.promises.rm(outDir, { recursive: true, force: true });
+		} catch {
+			// Ignore if doesn't exist or can't remove
+		}
+
 		// Build extension
 		if (isWatch) {
 			const extensionCtx = await esbuild.context(extensionConfig);
