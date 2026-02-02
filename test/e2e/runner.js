@@ -183,6 +183,46 @@ async function directWrite(terminalId, payload, timeoutMs) {
   });
 }
 
+async function startPipelineTrace(terminalId) {
+  const tracePath = await vscode.commands.executeCommand(
+    "bootty.startPipelineTrace",
+    { terminalId },
+  );
+  if (!tracePath || typeof tracePath !== "string") {
+    throw new Error("startPipelineTrace failed to return a trace path");
+  }
+  return tracePath;
+}
+
+async function stopPipelineTrace(terminalId) {
+  const tracePath = await vscode.commands.executeCommand(
+    "bootty.stopPipelineTrace",
+    { terminalId },
+  );
+  if (!tracePath || typeof tracePath !== "string") {
+    throw new Error("stopPipelineTrace failed to return a trace path");
+  }
+  const contents = fs.readFileSync(tracePath, "utf8");
+  const lines = contents.split("\n").filter(Boolean);
+  return lines.map((line) => JSON.parse(line));
+}
+
+function assertTraceStagesPresent(trace, expectedStages) {
+  const foundStages = new Set(trace.map((event) => event.stage));
+  const missing = expectedStages.filter((stage) => !foundStages.has(stage));
+  if (missing.length > 0) {
+    const stagesByType = {};
+    for (const event of trace) {
+      stagesByType[event.stage] = (stagesByType[event.stage] || 0) + 1;
+    }
+    throw new Error(
+      `Missing pipeline stages: ${missing.join(", ")}. Found: ${JSON.stringify(
+        stagesByType,
+      )}`,
+    );
+  }
+}
+
 async function runTypedInputEchoTest(terminalId, label, inputText, timeoutMs) {
   await vscode.commands.executeCommand("bootty.test.sendInput", {
     terminalId,
@@ -511,6 +551,12 @@ async function run() {
       }
     }
 
+    // Skip direct write tests when using WebGL renderer (Canvas2D not available in headless)
+    if (forcedRenderer && forcedRenderer !== "canvas") {
+      console.warn(
+        `[bootty e2e] Renderer forced to ${forcedRenderer}; skipping direct write tests (require Canvas2D).`,
+      );
+    } else {
     const directIdsBefore = await getPanelTerminalIds();
     await vscode.commands.executeCommand("bootty.newTerminalInPanel");
     const directTerminalId = await waitForNewPanelTerminal(
@@ -705,6 +751,74 @@ async function run() {
       }
     }
 
+    // Test rapid multi-write PTY pattern (from real zsh capture)
+    // This tests the timing-sensitive case where renders may happen between writes
+    const rapidExpected = "echo hello";
+    await directWrite(directTerminalId, "\x1b[2J\x1b[H", READY_TIMEOUT_MS); // Clear and home
+    // Send first character
+    await directWrite(directTerminalId, "e", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5)); // Small delay to allow potential render
+    // Send backspace + styled 'e' (as zsh does)
+    await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Send more backspace redraw cycles (from capture)
+    await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[0m\x1b[39m\x1b[90mxit\x1b[39m\b\b\b", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Type 'c' with redraw
+    await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[1m\x1b[31mc\x1b[0m\x1b[39m\x1b[39m \x1b[39m \b\b", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Autosuggestion appears
+    await directWrite(directTerminalId, "\x1b[90mho BOOTTY_KEY_BACKSPACE_TEST\x1b[39m\x1b[28D", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Type 'h' with backspaces
+    await directWrite(directTerminalId, "\b\b\x1b[1m\x1b[31me\x1b[1m\x1b[31mc\x1b[1m\x1b[31mh\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Type 'o' with backspaces
+    await directWrite(directTerminalId, "\b\x1b[1m\x1b[31mh\x1b[1m\x1b[31mo\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Convert to green "echo" with backspaces
+    await directWrite(directTerminalId, "\b\b\b\b\x1b[0m\x1b[32me\x1b[0m\x1b[32mc\x1b[0m\x1b[32mh\x1b[0m\x1b[32mo\x1b[39m", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Type space and more
+    await directWrite(directTerminalId, "\b\x1b[32mo\x1b[32m \x1b[39m", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    await directWrite(directTerminalId, "\b\b\x1b[32mo\x1b[39m\x1b[39m ", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Clear autosuggestion and write "hello"
+    await directWrite(directTerminalId, "\x1b[39mh\x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[24D", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    await directWrite(directTerminalId, "\x1b[90mello world\x1b[39m\x1b[10D", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    // Type 'e', 'l', 'l', 'o'
+    await directWrite(directTerminalId, "\x1b[39me", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    await directWrite(directTerminalId, "\x1b[39ml", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    await directWrite(directTerminalId, "\x1b[39ml", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 5));
+    await directWrite(directTerminalId, "\x1b[39mo", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 100)); // Final settle
+    // Position cursor at end for sampling
+    await directWrite(directTerminalId, "\x1b[H\x1b[" + rapidExpected.length + "C", READY_TIMEOUT_MS);
+    await new Promise((r) => setTimeout(r, 100));
+    const rapidSample = await sampleTrailingCells(
+      directTerminalId,
+      rapidExpected.length,
+      READY_TIMEOUT_MS,
+    );
+    assert.ok(!rapidSample?.error, rapidSample?.error ?? "rapid multi-write sample error");
+    const rapidText = rapidSample.cells.map((cell) => cell.char).join("");
+    assert.equal(rapidText, rapidExpected, "Rapid multi-write PTY pattern text mismatch: got '" + rapidText + "' expected '" + rapidExpected + "'");
+    for (const cell of rapidSample.cells) {
+      if (cell.char && cell.char !== " ") {
+        assert.equal(
+          cell.hasInk,
+          true,
+          `Expected ink for col ${cell.col} char ${cell.char} (rapid multi-write)`,
+        );
+      }
+    }
+
     await vscode.commands.executeCommand("bootty.test.destroyTerminal", {
       terminalId: directTerminalId,
     });
@@ -713,6 +827,236 @@ async function run() {
       terminalId: panelTerminalId,
     });
     await tryFocusPanel();
+    } // End of direct write tests skip block
+
+    // ============================================================
+    // ECHO VERIFICATION TESTS
+    // These tests verify that typed characters ECHO before Enter
+    // ============================================================
+    console.log("Starting echo verification tests...");
+
+    // Create a fresh terminal with minimal shell for echo testing
+    const echoTestIdsBefore = await getPanelTerminalIds();
+    await vscode.commands.executeCommand("bootty.newTerminalInPanel");
+    const echoTestTerminalId = await waitForNewPanelTerminal(
+      echoTestIdsBefore,
+      READY_TIMEOUT_MS,
+    );
+    await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+      terminalId: echoTestTerminalId,
+      timeoutMs: READY_TIMEOUT_MS,
+      panelTimeoutMs: READY_TIMEOUT_MS,
+    });
+    await tryFocusPanel();
+
+    // Switch to minimal shell with known prompt
+    const echoPrompt = "ECHO> ";
+    await vscode.commands.executeCommand("bootty.test.sendInput", {
+      terminalId: echoTestTerminalId,
+      data: `PS1='${echoPrompt}' sh\n`,
+    });
+    await waitForText({
+      terminalId: echoTestTerminalId,
+      text: echoPrompt,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
+    // Start pipeline trace to capture echo events
+    const echoTracePath = await startPipelineTrace(echoTestTerminalId);
+    console.log(`Echo test trace started: ${echoTracePath}`);
+
+    // TEST 1: Basic echo - type unique text and verify it appears via findText (not sampleTrailingCells)
+    // Use unique marker that won't appear elsewhere in the terminal
+    console.log("TEST 1: Basic echo verification (using waitForText)...");
+    const basicEchoMarker = "ECHO_TEST_7x9q2";
+    const basicEchoKeys = buildKeyEventsFromText(basicEchoMarker);
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: echoTestTerminalId,
+      keys: basicEchoKeys,
+    });
+
+    // Verify the echo appeared in the terminal buffer (WITHOUT pressing Enter)
+    // This uses findText which searches the xterm buffer, not canvas
+    try {
+      await waitForText({
+        terminalId: echoTestTerminalId,
+        text: basicEchoMarker,
+        timeoutMs: 5000, // Shorter timeout for echo (should be fast)
+      });
+      console.log("TEST 1: Basic echo verification PASSED - echo found in buffer");
+    } catch (error) {
+      // This is the bug we're looking for!
+      console.error(`ECHO BUG DETECTED: "${basicEchoMarker}" not found in terminal buffer after typing`);
+      console.error("The typed characters were sent to PTY but echo never appeared in the webview");
+      throw error;
+    }
+
+    // Press Enter to clear the line for next test
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: echoTestTerminalId,
+      keys: [{ key: "Enter", code: "Enter" }],
+    });
+    await waitForText({
+      terminalId: echoTestTerminalId,
+      text: echoPrompt,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
+    // TEST 2: Single character echo
+    console.log("TEST 2: Single character echo...");
+    const singleCharMarker = "Q"; // Unique character that's easy to find
+    const singleCharKeys = [{ key: singleCharMarker, code: "KeyQ" }];
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: echoTestTerminalId,
+      keys: singleCharKeys,
+    });
+
+    // Type more to make a unique searchable string
+    const singleTestSuffix = "7k3m";
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: echoTestTerminalId,
+      keys: buildKeyEventsFromText(singleTestSuffix),
+    });
+
+    try {
+      await waitForText({
+        terminalId: echoTestTerminalId,
+        text: singleCharMarker + singleTestSuffix,
+        timeoutMs: 5000,
+      });
+      console.log("TEST 2: Single character echo PASSED");
+    } catch (error) {
+      console.error(`ECHO BUG DETECTED: Single char echo "${singleCharMarker}${singleTestSuffix}" not found`);
+      throw error;
+    }
+
+    // Press Enter to clear
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: echoTestTerminalId,
+      keys: [{ key: "Enter", code: "Enter" }],
+    });
+    await waitForText({
+      terminalId: echoTestTerminalId,
+      text: echoPrompt,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
+    // TEST 3: Echo with backspace - type "abc", backspace, then type marker
+    // After backspace, type a unique suffix and verify the combined result
+    console.log("TEST 3: Echo with backspace...");
+    const backspaceTestPrefix = "abc";
+    const backspaceTestSuffix = "XY9z";
+    const backspaceEchoKeys = [
+      ...buildKeyEventsFromText(backspaceTestPrefix),
+      { key: "Backspace", code: "Backspace" },
+      ...buildKeyEventsFromText(backspaceTestSuffix),
+    ];
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: echoTestTerminalId,
+      keys: backspaceEchoKeys,
+    });
+
+    // After "abc" + backspace + "XY9z", should see "abXY9z"
+    const expectedBackspaceResult = "ab" + backspaceTestSuffix;
+    try {
+      await waitForText({
+        terminalId: echoTestTerminalId,
+        text: expectedBackspaceResult,
+        timeoutMs: 5000,
+      });
+      console.log("TEST 3: Echo with backspace PASSED");
+    } catch (error) {
+      console.error(`ECHO BUG DETECTED: Backspace echo "${expectedBackspaceResult}" not found`);
+      throw error;
+    }
+
+    // Press Enter to clear for next test
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: echoTestTerminalId,
+      keys: [{ key: "Enter", code: "Enter" }],
+    });
+    await waitForText({
+      terminalId: echoTestTerminalId,
+      text: echoPrompt,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
+    // TEST 4: Slow typing (simulates human typing speed)
+    // This should reproduce the echo bug seen in manual testing where
+    // individual characters typed slowly get dropped by webview.postMessage
+    console.log("TEST 4: Slow typing simulation (20ms between keys)...");
+    const slowTypingMarker = "SLOW_8k2p";
+    const slowTypingKeys = buildKeyEventsFromText(slowTypingMarker);
+    const INTER_KEY_DELAY_MS = 20; // Human typing speed ~50 WPM = ~20ms per keystroke
+
+    // Dispatch keys one at a time with delays
+    for (const keyEvent of slowTypingKeys) {
+      await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+        terminalId: echoTestTerminalId,
+        keys: [keyEvent],
+      });
+      await new Promise((resolve) => setTimeout(resolve, INTER_KEY_DELAY_MS));
+    }
+
+    // Verify the slow-typed text appeared in the terminal buffer
+    try {
+      await waitForText({
+        terminalId: echoTestTerminalId,
+        text: slowTypingMarker,
+        timeoutMs: 5000,
+      });
+      console.log("TEST 4: Slow typing PASSED - echo found in buffer");
+    } catch (error) {
+      console.error(`ECHO BUG DETECTED: Slow-typed "${slowTypingMarker}" not found in terminal buffer`);
+      console.error("This indicates individual echo characters are being dropped by postMessage");
+      throw error;
+    }
+
+    // Stop trace and analyze
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const echoTrace = await stopPipelineTrace(echoTestTerminalId);
+    console.log(`Echo trace captured ${echoTrace.length} events`);
+
+    // Analyze trace for echo events
+    const echoStagesByType = {};
+    for (const event of echoTrace) {
+      echoStagesByType[event.stage] = (echoStagesByType[event.stage] || 0) + 1;
+    }
+    console.log(`Echo trace stages: ${JSON.stringify(echoStagesByType)}`);
+
+    // Check for missing webview-recv events (the bug symptom)
+    const ptyRecvCount = echoStagesByType["pty-recv"] || 0;
+    const webviewRecvCount = echoStagesByType["webview-recv"] || 0;
+    console.log(`pty-recv: ${ptyRecvCount}, webview-recv: ${webviewRecvCount}`);
+
+    // Each echo character should have a corresponding webview-recv
+    // If webview-recv < pty-recv, echo data is being lost
+    if (webviewRecvCount < ptyRecvCount) {
+      console.error(`PIPELINE BUG: ${ptyRecvCount - webviewRecvCount} echo events missing from webview`);
+    }
+
+    // Verify all expected stages are present for echo
+    const echoExpectedStages = ["pty-recv", "batch-flush", "webview-recv", "term-write"];
+    const missingStages = echoExpectedStages.filter((stage) => !echoStagesByType[stage]);
+    if (missingStages.length > 0) {
+      console.error(`PIPELINE BUG: Missing stages for echo: ${missingStages.join(", ")}`);
+    }
+    assertTraceStagesPresent(echoTrace, echoExpectedStages);
+    console.log("Echo pipeline trace verification PASSED");
+
+    // Cleanup echo test terminal
+    await vscode.commands.executeCommand("bootty.test.destroyTerminal", {
+      terminalId: echoTestTerminalId,
+    });
+    await waitForPanelTerminalClosed(echoTestTerminalId, READY_TIMEOUT_MS);
+    await vscode.commands.executeCommand("bootty.test.activatePanelTerminal", {
+      terminalId: panelTerminalId,
+    });
+    await tryFocusPanel();
+    console.log("Echo verification tests completed");
+    // ============================================================
+    // END ECHO VERIFICATION TESTS
+    // ============================================================
 
     const keyEchoLabel = "BOOTTY_KEY_ECHO_0X_TEST";
     const keyEvents = [
@@ -1350,6 +1694,78 @@ async function run() {
   await vscode.commands.executeCommand("bootty.toggleProfiling");
   await new Promise((resolve) => setTimeout(resolve, 200));
   await vscode.commands.executeCommand("bootty.toggleProfiling");
+
+  // Pipeline trace test - verify data flows through all stages
+  console.log("Testing pipeline trace...");
+  const traceIdsBefore = await getPanelTerminalIds();
+  await vscode.commands.executeCommand("bootty.newTerminalInPanel");
+  const traceTerminalId = await waitForNewPanelTerminal(
+    traceIdsBefore,
+    READY_TIMEOUT_MS,
+  );
+  await vscode.commands.executeCommand("bootty.test.waitForHandshake", {
+    terminalId: traceTerminalId,
+    timeoutMs: READY_TIMEOUT_MS,
+    panelTimeoutMs: READY_TIMEOUT_MS,
+  });
+  await tryFocusPanel();
+
+  const tracePath = await startPipelineTrace(traceTerminalId);
+  console.log(`Pipeline trace started: ${tracePath}`);
+
+  // Send a simple echo command through the real PTY
+  const traceLabel = "BOOTTY_TRACE_TEST_12345";
+  await vscode.commands.executeCommand("bootty.test.sendInput", {
+    terminalId: traceTerminalId,
+    data: `echo ${traceLabel}\n`,
+  });
+  await waitForText({
+    terminalId: traceTerminalId,
+    text: traceLabel,
+    timeoutMs: READY_TIMEOUT_MS,
+  });
+
+  // Small delay to ensure all trace events are flushed
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const trace = await stopPipelineTrace(traceTerminalId);
+  console.log(`Pipeline trace stopped, ${trace.length} events captured`);
+
+  // Log trace summary by stage
+  const stagesByType = {};
+  for (const event of trace) {
+    stagesByType[event.stage] = (stagesByType[event.stage] || 0) + 1;
+  }
+  console.log(`Trace stages: ${JSON.stringify(stagesByType)}`);
+
+  // Verify all expected stages are present
+  const expectedStages = [
+    "pty-recv",      // Extension received from node-pty
+    "batch-flush",   // Extension sent to webview
+    "webview-recv",  // Webview received pty-data
+    "drain-result",  // Worker returned data
+    "term-write",    // Terminal.write() called
+  ];
+  assertTraceStagesPresent(trace, expectedStages);
+  console.log("Pipeline trace test passed - all stages present");
+
+  // Check that pty-recv bytes roughly match term-write bytes
+  const recvBytes = trace
+    .filter((e) => e.stage === "pty-recv")
+    .reduce((sum, e) => sum + e.bytes, 0);
+  const writeBytes = trace
+    .filter((e) => e.stage === "term-write")
+    .reduce((sum, e) => sum + e.bytes, 0);
+  console.log(`Bytes: pty-recv=${recvBytes} term-write=${writeBytes}`);
+  assert.ok(
+    writeBytes > 0,
+    `No bytes written to terminal (pty-recv=${recvBytes})`,
+  );
+
+  await vscode.commands.executeCommand("bootty.test.destroyTerminal", {
+    terminalId: traceTerminalId,
+  });
+  await waitForPanelTerminalClosed(traceTerminalId, READY_TIMEOUT_MS);
 
     setTimeout(() => process.exit(0), 200);
   } finally {

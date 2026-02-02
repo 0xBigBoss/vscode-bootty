@@ -6,6 +6,7 @@ export type TerminalLocation = "panel" | "editor";
 
 export interface TerminalConfig {
 	shell?: string;
+	shellArgs?: string[];
 	cwd?: string;
 	env?: Record<string, string>;
 	cols?: number; // Initial cols from FitAddon measurement
@@ -17,6 +18,7 @@ interface PtyOutputBuffer {
 	chunks: Uint8Array[];
 	bytes: number;
 	flushTimer?: ReturnType<typeof setTimeout>;
+	firstByteTime?: number; // Timestamp when first byte of batch arrived
 }
 
 /** Base fields shared by all terminal instances */

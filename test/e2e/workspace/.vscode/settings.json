@@ -1,4 +1,4 @@
 {
     "bootty.defaultTerminalLocation": "editor",
-    "bootty.renderer": "canvas"
+    "bootty.renderer": "webgl"
 }

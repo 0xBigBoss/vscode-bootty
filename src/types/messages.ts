@@ -27,6 +27,26 @@ export interface ProfileEvent {
 	terminalId?: TerminalId;
 }
 
+export type PipelineTraceEvent = {
+	ts: number; // ms since trace start
+	stage:
+		| "pty-recv"
+		| "batch-add"
+		| "batch-flush"
+		| "batch-queued" // data queued because instance not ready
+		| "instance-ready" // terminal instance became ready
+		| "webview-recv"
+		| "worker-enqueue"
+		| "drain-result"
+		| "term-write"
+		| "render-done";
+	terminalId: string;
+	bytes: number;
+	hex?: string; // first 64 bytes as hex
+	preview?: string; // escaped ASCII preview
+	extra?: Record<string, unknown>;
+};
+
 /** Runtime config for terminal behavior */
 export interface RuntimeConfig {
 	bellStyle: "visual" | "none";
@@ -165,6 +185,10 @@ export type ExtensionMessage =
 	| { type: "show-search" }
 	| { type: "profile-start"; sessionId: string }
 	| { type: "profile-stop"; sessionId: string }
+	| { type: "start-pipeline-trace"; terminalId: string; traceId: string }
+	| { type: "stop-pipeline-trace"; terminalId: string }
+	| { type: "pipeline-trace-started"; terminalId: string; tracePath: string }
+	| { type: "pipeline-trace-stopped"; terminalId: string; tracePath: string }
 	| { type: "bench-drain-request"; terminalId: TerminalId; token: string }
 	| {
 			type: "bench-direct-write";
@@ -223,7 +247,9 @@ export type PanelExtensionMessage =
 	  }
 	| { type: "update-terminal-icon"; terminalId: TerminalId; icon: string }
 	// NEW: Reorder terminals (extension -> webview)
-	| { type: "reorder-terminals"; terminalIds: TerminalId[] };
+	| { type: "reorder-terminals"; terminalIds: TerminalId[] }
+	// Debug mode toggle
+	| { type: "toggle-debug-mode"; enabled: boolean };
 
 /** Webview -> Extension (editor terminals) */
 export type WebviewMessage =
@@ -263,6 +289,8 @@ export type WebviewMessage =
 			terminalId: TerminalId;
 			token: string;
 	  }
+	| { type: "test-start-pipeline-trace"; terminalId: TerminalId }
+	| { type: "test-stop-pipeline-trace"; terminalId: TerminalId }
 	| {
 			type: "terminal-ready";
 			terminalId: TerminalId;
@@ -301,6 +329,12 @@ export type WebviewMessage =
 	  }
 	| { type: "profile-data"; sessionId: string; events: ProfileEvent[] }
 	| { type: "profile-error"; sessionId: string; error: string }
+	| {
+			type: "pipeline-trace-event";
+			terminalId: TerminalId;
+			event: PipelineTraceEvent;
+	  }
+	| { type: "pipeline-trace-stopped"; terminalId: TerminalId; traceId: string }
 	| {
 			type: "webview-error";
 			scope: "editor" | "panel";

@@ -122,6 +122,23 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	}
 
+	function resolveTargetTerminalId(options?: unknown): TerminalId | undefined {
+		if (!manager) return undefined;
+		const raw = options && typeof options === "object" ? options : {};
+		const provided =
+			typeof (raw as Record<string, unknown>).terminalId === "string"
+				? ((raw as Record<string, unknown>).terminalId as TerminalId)
+				: undefined;
+		if (provided) return provided;
+		const active = manager.getActiveTerminalId();
+		if (active) return active;
+		const panelIds = manager.getTerminalIds();
+		if (panelIds.length > 0) return panelIds[0];
+		const editorIds = manager.getEditorTerminalIds();
+		if (editorIds.length > 0) return editorIds[0];
+		return undefined;
+	}
+
 	// Register commands
 	context.subscriptions.push(
 		// New terminal (respects defaultTerminalLocation setting)
@@ -297,6 +314,70 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			await manager.togglePtyCapture();
 		}),
+
+		// Start pipeline trace logging
+		vscode.commands.registerCommand(
+			"bootty.startPipelineTrace",
+			async (options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				const terminalId = resolveTargetTerminalId(options);
+				if (!terminalId) {
+					vscode.window.showErrorMessage(
+						"BooTTY: No terminals are currently open.",
+					);
+					return null;
+				}
+				const tracePath = await manager.startPipelineTrace(terminalId);
+				vscode.window.showInformationMessage(
+					`BooTTY: Pipeline trace started. File: ${tracePath}`,
+				);
+				return tracePath;
+			},
+		),
+
+		// Stop pipeline trace logging
+		vscode.commands.registerCommand(
+			"bootty.stopPipelineTrace",
+			(options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				const terminalId = resolveTargetTerminalId(options);
+				if (!terminalId) {
+					vscode.window.showErrorMessage(
+						"BooTTY: No terminals are currently open.",
+					);
+					return null;
+				}
+				const tracePath = manager.stopPipelineTrace(terminalId);
+				if (!tracePath) {
+					vscode.window.showInformationMessage(
+						"BooTTY: Pipeline trace not active.",
+					);
+					return null;
+				}
+				vscode.window.showInformationMessage(
+					`BooTTY: Pipeline trace stopped. Saved to: ${tracePath}`,
+				);
+				return tracePath;
+			},
+		),
+
+		// Toggle render debug mode (GHOSTTY_DEBUG_WRITES + BOOTTY_DEBUG_CELLS)
+		(() => {
+			let debugModeEnabled = false;
+			return vscode.commands.registerCommand("bootty.toggleRenderDebug", () => {
+				debugModeEnabled = !debugModeEnabled;
+				panelProvider?.toggleDebugMode(debugModeEnabled);
+				vscode.window.showInformationMessage(
+					debugModeEnabled
+						? "BooTTY: Render debug mode ENABLED. Open DevTools (F12) to see logs."
+						: "BooTTY: Render debug mode DISABLED.",
+				);
+			});
+		})(),
 
 		// Internal: run benchmark scenarios (used by e2e harness)
 		vscode.commands.registerCommand(

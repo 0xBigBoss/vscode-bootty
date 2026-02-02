@@ -25,6 +25,7 @@ describe("terminal-utils", () => {
 	describe("DEFAULT_CONFIG", () => {
 		it("has expected default values", () => {
 			expect(DEFAULT_CONFIG.shell).toBeUndefined();
+			expect(DEFAULT_CONFIG.shellArgs).toEqual([]);
 			expect(DEFAULT_CONFIG.cwd).toBeUndefined();
 			expect(DEFAULT_CONFIG.env).toBeUndefined();
 			expect(DEFAULT_CONFIG.cols).toBe(80);
@@ -55,6 +56,7 @@ describe("terminal-utils", () => {
 			expect(config.cols).toBe(120);
 			expect(config.rows).toBe(40);
 			expect(config.shell).toBeUndefined(); // Default
+			expect(config.shellArgs).toEqual([]); // Default
 		});
 
 		it("always sets TERM_PROGRAM to bootty", () => {
@@ -97,6 +99,11 @@ describe("terminal-utils", () => {
 		it("preserves shell setting when provided", () => {
 			const config = resolveConfig({ shell: "/bin/zsh" });
 			expect(config.shell).toBe("/bin/zsh");
+		});
+
+		it("preserves shellArgs when provided", () => {
+			const config = resolveConfig({ shellArgs: ["--norc", "--noprofile"] });
+			expect(config.shellArgs).toEqual(["--norc", "--noprofile"]);
 		});
 
 		it("preserves cwd setting when provided", () => {

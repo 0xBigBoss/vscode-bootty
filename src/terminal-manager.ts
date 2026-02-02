@@ -25,6 +25,7 @@ import {
 import type {
 	ExtensionMessage,
 	PanelWebviewMessage,
+	PipelineTraceEvent,
 	ProfileEvent,
 	RendererMode,
 	RuntimeConfig,
@@ -388,11 +389,22 @@ export class TerminalManager implements vscode.Disposable {
 		maxBytes: number;
 		maxDelayMs: number;
 	};
+	// Debug flag for batch config logging
+	private _batchConfigLogged = false;
 	// PTY capture for debugging - toggle via bootty.togglePtyCapture command
 	private ptyCaptureEnabled = false;
 	private ptyCaptureStream?: fs.WriteStream;
 	private ptyCapturePath?: string;
 	private ptyCaptureStartTime?: number;
+	private pipelineTraceState = new Map<
+		TerminalId,
+		{
+			traceId: string;
+			startTime: number;
+			stream: fs.WriteStream;
+			tracePath: string;
+		}
+	>();
 
 	constructor(
 		context: vscode.ExtensionContext,
@@ -453,7 +465,27 @@ export class TerminalManager implements vscode.Disposable {
 	/** Type-safe message posting using discriminated union */
 	private postToTerminal(id: TerminalId, message: ExtensionMessage): void {
 		const instance = this.terminals.get(id);
-		if (!instance || !instance.ready) return;
+		// Debug: trace postToTerminal entry
+		if (message.type === "pty-data") {
+			const bytes = message.data.byteLength;
+			if (!instance) {
+				console.log(
+					`[postToTerminal] SKIP: instance not found id=${id} bytes=${bytes}`,
+				);
+				return;
+			}
+			if (!instance.ready) {
+				console.log(
+					`[postToTerminal] SKIP: instance.ready=false id=${id} bytes=${bytes}`,
+				);
+				return;
+			}
+			console.log(
+				`[postToTerminal] SEND: id=${id} bytes=${bytes} location=${instance.location}`,
+			);
+		} else {
+			if (!instance || !instance.ready) return;
+		}
 
 		if (instance.location === "editor") {
 			// TypeScript knows instance.panel exists here
@@ -1878,9 +1910,12 @@ export class TerminalManager implements vscode.Disposable {
 			0,
 			Math.floor(config.get<number>("pty.outputBatchMaxBytes") ?? 0),
 		);
+		// Default to 8ms delay to batch rapid echo characters together.
+		// VS Code's webview.postMessage appears to drop rapid small messages
+		// in the Extension Development Host. Batching works around this.
 		const maxDelayMs = Math.max(
 			0,
-			config.get<number>("pty.outputBatchMaxDelayMs") ?? 0,
+			config.get<number>("pty.outputBatchMaxDelayMs") ?? 8,
 		);
 		return { maxBytes, maxDelayMs };
 	}
@@ -2409,7 +2444,8 @@ export class TerminalManager implements vscode.Disposable {
 		id: TerminalId,
 		config?: Partial<TerminalConfig>,
 	): { ok: true } | { ok: false; error: string } {
-		const resolvedConfig = resolveConfig(config);
+		const shellConfig = this.resolveShellConfig();
+		const resolvedConfig = resolveConfig({ ...shellConfig, ...(config ?? {}) });
 		const result = this.ptyService.spawn(id, resolvedConfig, {
 			onData: (data) => this.handlePtyData(id, data),
 			onExit: (code) => this.handlePtyExit(id, code),
@@ -2423,6 +2459,18 @@ export class TerminalManager implements vscode.Disposable {
 			return { ok: false, error: result.error };
 		}
 		return { ok: true };
+	}
+
+	private resolveShellConfig(): Pick<TerminalConfig, "shell" | "shellArgs"> {
+		const config = vscode.workspace.getConfiguration("bootty");
+		const rawShell = config.get<string>("shell") ?? "";
+		const trimmedShell = rawShell.trim();
+		const shell = trimmedShell.length > 0 ? rawShell : undefined;
+		const rawShellArgs = config.get<unknown>("shellArgs");
+		const shellArgs = Array.isArray(rawShellArgs)
+			? rawShellArgs.filter((arg): arg is string => typeof arg === "string")
+			: [];
+		return { shell, shellArgs };
 	}
 
 	/** Handle messages from panel webview */
@@ -2606,11 +2654,44 @@ export class TerminalManager implements vscode.Disposable {
 				}
 				break;
 			}
+			case "test-start-pipeline-trace": {
+				void this.startPipelineTrace(message.terminalId)
+					.then((tracePath) => {
+						this.postToTerminal(message.terminalId, {
+							type: "pipeline-trace-started",
+							terminalId: message.terminalId,
+							tracePath,
+						});
+					})
+					.catch((error) => {
+						const err = error instanceof Error ? error.message : String(error);
+						this.outputChannel.appendLine(
+							`[Pipeline Trace] Failed to start trace: ${err}`,
+						);
+					});
+				break;
+			}
+			case "test-stop-pipeline-trace": {
+				const tracePath = this.stopPipelineTrace(message.terminalId);
+				if (tracePath) {
+					this.postToTerminal(message.terminalId, {
+						type: "pipeline-trace-stopped",
+						terminalId: message.terminalId,
+						tracePath,
+					});
+				}
+				break;
+			}
 			case "profile-data":
 				this.handleProfileData(message.sessionId, message.events);
 				break;
 			case "profile-error":
 				this.handleProfileError(message.sessionId, message.error);
+				break;
+			case "pipeline-trace-event":
+				this.writePipelineTraceEvent(message.terminalId, message.event);
+				break;
+			case "pipeline-trace-stopped":
 				break;
 			case "webview-error": {
 				const label = message.terminalId ? `[${message.terminalId}] ` : "";
@@ -2769,6 +2850,13 @@ export class TerminalManager implements vscode.Disposable {
 
 	private enqueuePtyOutput(instance: TerminalInstance, data: Uint8Array): void {
 		const { maxBytes, maxDelayMs } = this.ptyOutputBatchConfig;
+		// Debug: log batch config on first call
+		if (!this._batchConfigLogged) {
+			this._batchConfigLogged = true;
+			console.log(
+				`[enqueuePtyOutput] maxBytes=${maxBytes} maxDelayMs=${maxDelayMs}`,
+			);
+		}
 		if (maxBytes <= 0 && maxDelayMs <= 0) {
 			this.postToTerminal(instance.id, {
 				type: "pty-data",
@@ -2778,11 +2866,23 @@ export class TerminalManager implements vscode.Disposable {
 			return;
 		}
 		if (!instance.outputBuffer) {
-			instance.outputBuffer = { chunks: [], bytes: 0 };
+			instance.outputBuffer = {
+				chunks: [],
+				bytes: 0,
+				firstByteTime: Date.now(),
+			};
 		}
 		const buffer = instance.outputBuffer;
 		buffer.chunks.push(data);
 		buffer.bytes += data.byteLength;
+		// Track when the first byte of this batch arrived
+		if (buffer.chunks.length === 1) {
+			buffer.firstByteTime = Date.now();
+		}
+		this.tracePipelineEvent(instance.id, "batch-add", data.byteLength, data, {
+			queueBytes: buffer.bytes,
+			queueChunks: buffer.chunks.length,
+		});
 
 		if (maxBytes > 0 && buffer.bytes >= maxBytes) {
 			this.flushPtyOutputBuffer(instance);
@@ -2796,7 +2896,7 @@ export class TerminalManager implements vscode.Disposable {
 				if (instance.outputBuffer) {
 					instance.outputBuffer.flushTimer = undefined;
 				}
-				this.flushPtyOutputBuffer(instance);
+				this.tryFlushPtyOutputBuffer(instance, maxDelayMs);
 			}, maxDelayMs);
 		} else if (!buffer.flushTimer) {
 			buffer.flushTimer = setTimeout(() => {
@@ -2808,6 +2908,51 @@ export class TerminalManager implements vscode.Disposable {
 		}
 	}
 
+	/**
+	 * Attempt to flush the PTY output buffer, but reschedule if the batch
+	 * is too small (< MIN_BATCH_BYTES).
+	 * This prevents VS Code's webview.postMessage from dropping tiny messages.
+	 *
+	 * IMPORTANT: We NEVER force-flush small batches. They accumulate until:
+	 * 1. More data arrives and reaches MIN_BATCH_BYTES
+	 * 2. A large chunk (command output) arrives and batches with pending data
+	 * 3. The terminal closes
+	 */
+	private tryFlushPtyOutputBuffer(
+		instance: TerminalInstance,
+		delayMs: number,
+	): void {
+		const buffer = instance.outputBuffer;
+		if (!buffer || buffer.bytes === 0) return;
+
+		// Minimum batch size to prevent message drops.
+		// VS Code's webview.postMessage drops small rapid messages.
+		// NEVER flush less than this - the message WILL be dropped.
+		const MIN_BATCH_BYTES = 4;
+
+		// Only flush if we have enough bytes to survive postMessage.
+		if (buffer.bytes >= MIN_BATCH_BYTES) {
+			this.flushPtyOutputBuffer(instance);
+			return;
+		}
+
+		// Not enough bytes yet - keep waiting indefinitely.
+		// The data will eventually batch with:
+		// - More keystrokes from the user
+		// - Command output from the shell (when user presses Enter)
+		// This may cause apparent "lag" for individual characters, but
+		// it's better than dropping them entirely.
+		if (buffer.flushTimer) {
+			clearTimeout(buffer.flushTimer);
+		}
+		buffer.flushTimer = setTimeout(() => {
+			if (instance.outputBuffer) {
+				instance.outputBuffer.flushTimer = undefined;
+			}
+			this.tryFlushPtyOutputBuffer(instance, delayMs);
+		}, delayMs);
+	}
+
 	private flushPtyOutputBuffer(instance: TerminalInstance): void {
 		const buffer = instance.outputBuffer;
 		if (!buffer || buffer.bytes === 0) return;
@@ -2815,13 +2960,26 @@ export class TerminalManager implements vscode.Disposable {
 			clearTimeout(buffer.flushTimer);
 			buffer.flushTimer = undefined;
 		}
-		const payload = this.concatPtyChunks(buffer.chunks, buffer.bytes);
+		const totalBytes = buffer.bytes;
+		this.tracePipelineEvent(instance.id, "batch-flush", totalBytes, undefined, {
+			instanceReady: instance.ready,
+		});
+		const payload = this.concatPtyChunks(buffer.chunks, totalBytes);
 		buffer.chunks = [];
 		buffer.bytes = 0;
 		if (!instance.ready) {
 			if (instance.dataQueue.length < MAX_DATA_QUEUE_SIZE) {
 				instance.dataQueue.push(payload);
 			}
+			this.tracePipelineEvent(
+				instance.id,
+				"batch-queued",
+				totalBytes,
+				undefined,
+				{
+					queueLength: instance.dataQueue.length,
+				},
+			);
 			return;
 		}
 		this.postToTerminal(instance.id, {
@@ -2868,6 +3026,7 @@ export class TerminalManager implements vscode.Disposable {
 		this.capturePtyData(id, data);
 
 		const payload = typeof data === "string" ? this.encodePtyData(data) : data;
+		this.tracePipelineEvent(id, "pty-recv", payload.byteLength, payload);
 		const needsBenchmark =
 			this.benchmarkWatchers.has(id) || this.benchmarkCommandWatchers.has(id);
 		const needsOsc =
@@ -2918,6 +3077,135 @@ export class TerminalManager implements vscode.Disposable {
 		}
 	}
 
+	async startPipelineTrace(terminalId: TerminalId): Promise<string> {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			throw new Error(`Terminal ${terminalId} does not exist.`);
+		}
+		const existing = this.pipelineTraceState.get(terminalId);
+		if (existing) {
+			return existing.tracePath;
+		}
+		const traceId = crypto.randomUUID();
+		const traceDir = path.join(
+			this.context.logUri.fsPath,
+			PROFILE_OUTPUT_SUBDIR,
+		);
+		const tracePath = path.join(traceDir, `pipeline-trace-${traceId}.jsonl`);
+		await fs.promises.mkdir(traceDir, { recursive: true });
+		const stream = fs.createWriteStream(tracePath, {
+			flags: "w",
+			encoding: "utf8",
+		});
+		stream.on("error", (error) => {
+			this.outputChannel.appendLine(
+				`[Pipeline Trace] Stream error (${terminalId}): ${error.message}`,
+			);
+		});
+		this.pipelineTraceState.set(terminalId, {
+			traceId,
+			startTime: Date.now(),
+			stream,
+			tracePath,
+		});
+		this.postToTerminal(terminalId, {
+			type: "start-pipeline-trace",
+			terminalId,
+			traceId,
+		});
+		return tracePath;
+	}
+
+	stopPipelineTrace(terminalId: TerminalId): string | null {
+		const trace = this.pipelineTraceState.get(terminalId);
+		if (!trace) return null;
+		this.pipelineTraceState.delete(terminalId);
+		trace.stream.end();
+		this.postToTerminal(terminalId, {
+			type: "stop-pipeline-trace",
+			terminalId,
+		});
+		return trace.tracePath;
+	}
+
+	private tracePipelineEvent(
+		terminalId: TerminalId,
+		stage: PipelineTraceEvent["stage"],
+		bytes: number,
+		data?: Uint8Array,
+		extra?: Record<string, unknown>,
+	): void {
+		const trace = this.pipelineTraceState.get(terminalId);
+		if (!trace) return;
+		const event: PipelineTraceEvent = {
+			ts: Date.now() - trace.startTime,
+			stage,
+			terminalId,
+			bytes,
+			hex: data && data.byteLength > 0 ? this.traceHex(data) : undefined,
+			preview:
+				data && data.byteLength > 0 ? this.tracePreview(data) : undefined,
+			extra,
+		};
+		trace.stream.write(`${JSON.stringify(event)}\n`);
+	}
+
+	private writePipelineTraceEvent(
+		terminalId: TerminalId,
+		event: PipelineTraceEvent,
+	): void {
+		const trace = this.pipelineTraceState.get(terminalId);
+		if (!trace) return;
+		trace.stream.write(`${JSON.stringify(event)}\n`);
+	}
+
+	private traceHex(data: Uint8Array, limit = 64): string {
+		const len = Math.min(limit, data.length);
+		let output = "";
+		for (let i = 0; i < len; i += 1) {
+			output += data[i].toString(16).padStart(2, "0");
+		}
+		return output;
+	}
+
+	private tracePreview(data: Uint8Array, limit = 64): string {
+		const len = Math.min(limit, data.length);
+		let output = "";
+		for (let i = 0; i < len; i += 1) {
+			const byte = data[i];
+			if (byte >= 0x20 && byte < 0x7f && byte !== 0x5c) {
+				output += String.fromCharCode(byte);
+				continue;
+			}
+			switch (byte) {
+				case 0x07:
+					output += "\\a";
+					break;
+				case 0x08:
+					output += "\\b";
+					break;
+				case 0x09:
+					output += "\\t";
+					break;
+				case 0x0a:
+					output += "\\n";
+					break;
+				case 0x0d:
+					output += "\\r";
+					break;
+				case 0x1b:
+					output += "\\x1b";
+					break;
+				case 0x5c:
+					output += "\\\\";
+					break;
+				default:
+					output += `\\x${byte.toString(16).padStart(2, "0")}`;
+			}
+		}
+		return output;
+	}
+
 	/**
 	 * Toggle PTY capture on/off. When enabled, captures raw PTY bytes to a JSONL file.
 	 * Use bootty.togglePtyCapture command to toggle.
@@ -2954,12 +3242,12 @@ export class TerminalManager implements vscode.Disposable {
 				this.ptyCaptureEnabled = true;
 
 				this.ptyCaptureStream.write(
-					JSON.stringify({
+					`${JSON.stringify({
 						type: "start",
 						ts: 0,
 						path: capturePath,
 						startTime: new Date().toISOString(),
-					}) + "\n",
+					})}\n`,
 				);
 
 				this.outputChannel.appendLine(
@@ -2986,11 +3274,11 @@ export class TerminalManager implements vscode.Disposable {
 	private stopPtyCapture(): void {
 		if (this.ptyCaptureStream) {
 			this.ptyCaptureStream.write(
-				JSON.stringify({
+				`${JSON.stringify({
 					type: "end",
 					ts: (Date.now() - (this.ptyCaptureStartTime ?? Date.now())) / 1000,
 					endTime: new Date().toISOString(),
-				}) + "\n",
+				})}\n`,
 			);
 			this.ptyCaptureStream.end();
 			this.ptyCaptureStream = undefined;
@@ -3059,7 +3347,7 @@ export class TerminalManager implements vscode.Disposable {
 			len: bytes.length,
 		};
 
-		this.ptyCaptureStream.write(JSON.stringify(record) + "\n");
+		this.ptyCaptureStream.write(`${JSON.stringify(record)}\n`);
 	}
 
 	private handleTerminalReady(
@@ -3081,6 +3369,11 @@ export class TerminalManager implements vscode.Disposable {
 
 		// Mark ready BEFORE posting messages so postToTerminal works
 		instance.ready = true;
+		this.tracePipelineEvent(id, "instance-ready", 0, undefined, {
+			cols,
+			rows,
+			queuedDataChunks: instance.dataQueue.length,
+		});
 
 		// Send initial display settings
 		const settings = getDisplaySettings();
@@ -3557,6 +3850,7 @@ export class TerminalManager implements vscode.Disposable {
 		const instance = this.terminals.get(id);
 		if (!instance) return; // Already destroyed
 		this.terminals.delete(id);
+		this.stopPipelineTrace(id);
 
 		// Clean up renderer info for this terminal
 		this.rendererInfo.delete(id);
@@ -4493,6 +4787,11 @@ export class TerminalManager implements vscode.Disposable {
 			// Panel terminals: don't dispose panel WebviewView, just let it clean up
 		}
 		this.terminals.clear();
+		if (this.pipelineTraceState.size > 0) {
+			for (const terminalId of [...this.pipelineTraceState.keys()]) {
+				this.stopPipelineTrace(terminalId);
+			}
+		}
 		this.ptyService.dispose();
 
 		// Close PTY capture stream if open

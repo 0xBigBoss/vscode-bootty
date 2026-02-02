@@ -137,6 +137,18 @@
 			{
 				"command": "bootty.togglePtyCapture",
 				"title": "BooTTY: Toggle PTY Capture"
+			},
+			{
+				"command": "bootty.startPipelineTrace",
+				"title": "BooTTY: Start Pipeline Trace"
+			},
+			{
+				"command": "bootty.stopPipelineTrace",
+				"title": "BooTTY: Stop Pipeline Trace"
+			},
+			{
+				"command": "bootty.toggleRenderDebug",
+				"title": "BooTTY: Toggle Render Debug Mode"
 			}
 		],
 		"menus": {
@@ -186,6 +198,19 @@
 					],
 					"default": "panel",
 					"description": "Where new terminals open by default"
+				},
+				"bootty.shell": {
+					"type": "string",
+					"default": "",
+					"description": "Optional shell path for BooTTY terminals. Leave empty to use the system default."
+				},
+				"bootty.shellArgs": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Arguments passed to the shell when launching BooTTY terminals. Example: [\"--norc\", \"--noprofile\"]."
 				},
 				"bootty.bell": {
 					"type": "string",
@@ -420,6 +445,9 @@
 		"onCommand:bootty.togglePanel",
 		"onCommand:bootty.toggleProfiling",
 		"onCommand:bootty.togglePtyCapture",
+		"onCommand:bootty.startPipelineTrace",
+		"onCommand:bootty.stopPipelineTrace",
+		"onCommand:bootty.toggleRenderDebug",
 		"onView:boottyTerminalPanel"
 	],
 	"extensionKind": [

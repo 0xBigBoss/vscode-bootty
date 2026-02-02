@@ -41,6 +41,53 @@ function previewBytes(bytes: Uint8Array, limit = 256): string {
 	return `len=${bytes.length} head=${JSON.stringify(headText)} headHex=${headHex} tail=${JSON.stringify(tailText)} tailHex=${tailHex}`;
 }
 
+function traceHex(bytes: Uint8Array, limit = 64): string {
+	const len = Math.min(limit, bytes.length);
+	let output = "";
+	for (let i = 0; i < len; i += 1) {
+		output += bytes[i].toString(16).padStart(2, "0");
+	}
+	return output;
+}
+
+function tracePreview(bytes: Uint8Array, limit = 64): string {
+	const len = Math.min(limit, bytes.length);
+	let output = "";
+	for (let i = 0; i < len; i += 1) {
+		const byte = bytes[i];
+		if (byte >= 0x20 && byte < 0x7f && byte !== 0x5c) {
+			output += String.fromCharCode(byte);
+			continue;
+		}
+		switch (byte) {
+			case 0x07:
+				output += "\\a";
+				break;
+			case 0x08:
+				output += "\\b";
+				break;
+			case 0x09:
+				output += "\\t";
+				break;
+			case 0x0a:
+				output += "\\n";
+				break;
+			case 0x0d:
+				output += "\\r";
+				break;
+			case 0x1b:
+				output += "\\x1b";
+				break;
+			case 0x5c:
+				output += "\\\\";
+				break;
+			default:
+				output += `\\x${byte.toString(16).padStart(2, "0")}`;
+		}
+	}
+	return output;
+}
+
 function computeCellHasInk(data: Uint8ClampedArray): boolean {
 	const buckets = new Map<
 		number,
@@ -174,6 +221,7 @@ import {
 import type {
 	PanelExtensionMessage,
 	PanelWebviewMessage,
+	PipelineTraceEvent,
 	RendererMode,
 	RendererStatus,
 	RendererType,
@@ -288,6 +336,10 @@ const boottyPanelInit = async (): Promise<void> => {
 			mergeBytes: number;
 			suppressPty: boolean;
 		}
+	>();
+	const pipelineTraceActive = new Map<
+		TerminalId,
+		{ traceId: string; startTime: number }
 	>();
 	const adaptiveMaxLinesByTerminal = new Map<TerminalId, number>();
 	const benchDrainState = new Map<TerminalId, { token: string }>();
@@ -433,6 +485,16 @@ const boottyPanelInit = async (): Promise<void> => {
 		if (output.byteLength > 0) {
 			const terminal = terminals.get(msg.terminalId);
 			if (terminal) {
+				tracePipelineEvent(
+					msg.terminalId,
+					"drain-result",
+					output.byteLength,
+					output,
+					{
+						drainedLines: msg.drainedLines,
+						queueBytesAfter: msg.queueBytesAfter,
+					},
+				);
 				logPty(
 					"drain-result terminal=%s drainedBytes=%d drainedLines=%d queueBytesBefore=%d queueBytesAfter=%d output=%s",
 					msg.terminalId,
@@ -467,6 +529,12 @@ const boottyPanelInit = async (): Promise<void> => {
 					msg.terminalId,
 					previewBytes(output),
 				);
+				tracePipelineEvent(
+					msg.terminalId,
+					"term-write",
+					output.byteLength,
+					output,
+				);
 				termApi.write(output);
 				profileCollector.recordDuration(
 					"bootty:webview:pty-write",
@@ -497,6 +565,15 @@ const boottyPanelInit = async (): Promise<void> => {
 
 		if (state.pendingChunks.length > 0) {
 			for (const chunk of state.pendingChunks) {
+				tracePipelineEvent(
+					msg.terminalId,
+					"worker-enqueue",
+					chunk.byteLength,
+					chunk,
+					{
+						queueSegments: state.segments,
+					},
+				);
 				ptyWorker.postMessage(
 					{ type: "enqueue", terminalId: msg.terminalId, data: chunk },
 					[chunk.buffer],
@@ -780,6 +857,31 @@ const boottyPanelInit = async (): Promise<void> => {
 		return merged;
 	}
 
+	function tracePipelineEvent(
+		terminalId: string,
+		stage: PipelineTraceEvent["stage"],
+		bytes: number,
+		data?: Uint8Array,
+		extra?: Record<string, unknown>,
+	) {
+		const trace = pipelineTraceActive.get(terminalId as TerminalId);
+		if (!trace) return;
+		const event: PipelineTraceEvent = {
+			ts: performance.now() - trace.startTime,
+			stage,
+			terminalId,
+			bytes,
+			hex: data ? traceHex(data) : undefined,
+			preview: data ? tracePreview(data) : undefined,
+			extra,
+		};
+		vscode.postMessage({
+			type: "pipeline-trace-event",
+			terminalId: terminalId as TerminalId,
+			event,
+		} satisfies PanelWebviewMessage);
+	}
+
 	function flushMergedPtyData(terminalId: TerminalId): void {
 		const state = ptyQueueState.get(terminalId);
 		if (!state) return;
@@ -796,6 +898,15 @@ const boottyPanelInit = async (): Promise<void> => {
 			state.pendingBytes += merged.byteLength;
 			state.pendingSegments += 1;
 		} else {
+			tracePipelineEvent(
+				terminalId,
+				"worker-enqueue",
+				merged.byteLength,
+				merged,
+				{
+					queueSegments: state.segments,
+				},
+			);
 			ptyWorker.postMessage({ type: "enqueue", terminalId, data: merged }, [
 				merged.buffer,
 			]);
@@ -2034,6 +2145,13 @@ const boottyPanelInit = async (): Promise<void> => {
 	window.addEventListener("message", async (e) => {
 		const msg = e.data as PanelExtensionMessage;
 
+		// Debug: log every message received by webview
+		if (msg.type === "pty-data") {
+			console.log(
+				`[webview-recv] type=pty-data terminalId=${msg.terminalId} bytes=${msg.data?.byteLength ?? 0}`,
+			);
+		}
+
 		switch (msg.type) {
 			case "add-tab": {
 				const terminal = createTerminal(msg.terminalId, msg.title);
@@ -2201,6 +2319,21 @@ const boottyPanelInit = async (): Promise<void> => {
 				terminalList.reorderItems(msg.terminalIds);
 				break;
 
+			case "toggle-debug-mode": {
+				const win = window as unknown as {
+					GHOSTTY_DEBUG_WRITES?: boolean;
+					BOOTTY_DEBUG_CELLS?: boolean;
+				};
+				win.GHOSTTY_DEBUG_WRITES = msg.enabled;
+				win.BOOTTY_DEBUG_CELLS = msg.enabled;
+				console.log(
+					`[bootty] Debug mode ${msg.enabled ? "enabled" : "disabled"}. ` +
+						`GHOSTTY_DEBUG_WRITES=${win.GHOSTTY_DEBUG_WRITES}, ` +
+						`BOOTTY_DEBUG_CELLS=${win.BOOTTY_DEBUG_CELLS}`,
+				);
+				break;
+			}
+
 			case "show-search": {
 				if (activeTerminalId) {
 					const terminal = terminals.get(activeTerminalId);
@@ -2322,6 +2455,12 @@ const boottyPanelInit = async (): Promise<void> => {
 				const terminal = terminals.get(msg.terminalId);
 				if (terminal) {
 					if (msg.data.byteLength > 0) {
+						tracePipelineEvent(
+							msg.terminalId,
+							"webview-recv",
+							msg.data.byteLength,
+							msg.data,
+						);
 						const state = getPtyQueueState(msg.terminalId);
 						if (state.suppressPty) break;
 						state.mergeChunks.push(msg.data);
@@ -2505,6 +2644,27 @@ const boottyPanelInit = async (): Promise<void> => {
 					msg.token,
 				);
 				break;
+
+			case "start-pipeline-trace": {
+				pipelineTraceActive.set(msg.terminalId as TerminalId, {
+					traceId: msg.traceId,
+					startTime: performance.now(),
+				});
+				break;
+			}
+
+			case "stop-pipeline-trace": {
+				const trace = pipelineTraceActive.get(msg.terminalId as TerminalId);
+				if (trace) {
+					pipelineTraceActive.delete(msg.terminalId as TerminalId);
+					vscode.postMessage({
+						type: "pipeline-trace-stopped",
+						terminalId: msg.terminalId as TerminalId,
+						traceId: trace.traceId,
+					} satisfies PanelWebviewMessage);
+				}
+				break;
+			}
 
 			case "profile-start":
 				profileCollector.start(msg.sessionId);

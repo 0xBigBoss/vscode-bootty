@@ -71,12 +71,13 @@ export class PtyService implements vscode.Disposable {
 	): SpawnResult {
 		try {
 			const shell = config.shell || this.getDefaultShell();
+			const shellArgs = config.shellArgs ?? [];
 			const cwd = config.cwd || process.env.HOME || process.cwd();
 
 			// Log for debugging
 			console.log(`[PtyService] Spawning shell: ${shell}, cwd: ${cwd}`);
 
-			const proc = pty.spawn(shell, [], {
+			const proc = pty.spawn(shell, shellArgs, {
 				name: "xterm-256color",
 				cols: config.cols || 80,
 				rows: config.rows || 24,

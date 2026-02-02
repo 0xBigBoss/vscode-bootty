@@ -144,8 +144,20 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			(this._view.visible || sendImmediately)
 		) {
 			this._view.webview.postMessage(message);
+			// Debug: log pty-data posts
+			if (message.type === "pty-data") {
+				console.log(
+					`[panel-post] terminalId=${message.terminalId} bytes=${message.data.byteLength}`,
+				);
+			}
 		} else {
 			this._messageQueue.push(message);
+			// Debug: log when pty-data is queued instead of sent
+			if (message.type === "pty-data") {
+				console.log(
+					`[panel-queued] terminalId=${message.terminalId} bytes=${message.data.byteLength} isReady=${this._isReady} hasView=${!!this._view} visible=${this._view?.visible}`,
+				);
+			}
 		}
 	}
 
@@ -206,6 +218,11 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	/** Show the search overlay in the active terminal */
 	showSearch(): void {
 		this.postMessage({ type: "show-search" });
+	}
+
+	/** Toggle debug mode in the webview (enables GHOSTTY_DEBUG_WRITES and BOOTTY_DEBUG_CELLS) */
+	toggleDebugMode(enabled: boolean): void {
+		this.postMessage({ type: "toggle-debug-mode", enabled });
 	}
 
 	/** Check if the panel is visible */

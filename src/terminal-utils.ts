@@ -9,6 +9,7 @@ export function createTerminalId(): TerminalId {
 /** Default terminal configuration */
 export const DEFAULT_CONFIG: TerminalConfig = {
 	shell: undefined, // Use platform default (detected at spawn)
+	shellArgs: [], // Default to no arguments
 	cwd: undefined, // Use workspace root or home
 	env: undefined, // Inherit process.env at spawn time
 	cols: 80,
