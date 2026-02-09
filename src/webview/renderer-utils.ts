@@ -1,9 +1,8 @@
-/**
- * Renderer selection utilities for BooTTY webviews.
- * Handles WebGL2 detection, renderer creation, and fallback logic.
- */
-
-import type { RendererMode, RendererType } from "../types/messages";
+import type {
+	RendererMode,
+	RendererStatus,
+	RendererType,
+} from "../types/messages";
 
 /** Result of renderer creation */
 export interface RendererResult {
@@ -11,6 +10,23 @@ export interface RendererResult {
 	type: RendererType;
 	fallback: boolean;
 	reason?: string;
+}
+
+export interface RendererBackendState {
+	type: RendererType;
+	status: RendererStatus;
+	fallback: boolean;
+	reason?: string;
+}
+
+interface RendererBackendControllerOptions {
+	mode: RendererMode;
+	createWebglRenderer: ((onContextLoss: () => void) => unknown) | null;
+	onStatusChange?: (state: RendererBackendState) => void;
+}
+
+interface RendererHost {
+	setRenderer?: (renderer?: unknown) => void;
 }
 
 /** Check if WebGL2 is available in the current context */
@@ -24,83 +40,150 @@ function isWebGL2Available(): boolean {
 	}
 }
 
-/**
- * Create the appropriate renderer based on mode and availability.
- *
- * @param mode - The renderer mode from settings ('auto', 'webgl', 'canvas')
- * @param webglRendererFactory - Factory function to create WebGLRenderer (imported dynamically)
- * @returns RendererResult with the created renderer and metadata
- */
-export function createRenderer(
-	mode: RendererMode,
-	webglRendererFactory: (() => unknown) | null,
-): RendererResult {
-	// Canvas forced - skip WebGL entirely
-	if (mode === "canvas") {
-		return {
-			renderer: undefined,
-			type: "canvas",
-			fallback: false,
-			reason: "Canvas mode forced by setting",
+export class RendererBackendController {
+	private readonly mode: RendererMode;
+	private readonly createWebglRenderer: RendererBackendControllerOptions["createWebglRenderer"];
+	private readonly onStatusChange?: (state: RendererBackendState) => void;
+	private state: RendererBackendState = {
+		type: "canvas",
+		status: "active",
+		fallback: false,
+	};
+	private host?: RendererHost;
+	private pendingCanvasFallback = false;
+
+	constructor(options: RendererBackendControllerOptions) {
+		this.mode = options.mode;
+		this.createWebglRenderer = options.createWebglRenderer;
+		this.onStatusChange = options.onStatusChange;
+	}
+
+	initialize(): RendererResult {
+		const result = this.selectInitialRenderer();
+		this.state = {
+			type: result.type,
+			status: "active",
+			fallback: result.fallback,
+			reason: result.reason,
 		};
+		this.emitStatus();
+		return result;
 	}
 
-	// Check WebGL2 availability
-	const webgl2Available = isWebGL2Available();
-
-	// WebGL forced but not available - error
-	if (mode === "webgl" && !webgl2Available) {
-		throw new Error(
-			"WebGL2 is not available in this environment, but 'webgl' mode was forced",
-		);
+	bindHost(host: RendererHost): void {
+		this.host = host;
+		if (this.pendingCanvasFallback) {
+			this.pendingCanvasFallback = false;
+			this.swapToCanvas("WebGL context lost after repeated failures");
+		}
 	}
 
-	// Auto mode and WebGL2 not available - use Canvas
-	if (mode === "auto" && !webgl2Available) {
-		return {
-			renderer: undefined,
-			type: "canvas",
-			fallback: true,
-			reason: "WebGL2 not available",
-		};
+	getState(): RendererBackendState {
+		return { ...this.state };
 	}
 
-	// Try to create WebGL renderer
-	if (webglRendererFactory) {
+	handleWebglContextLoss(): void {
+		if (this.state.type !== "webgl") {
+			return;
+		}
+		this.swapToCanvas("WebGL context lost after repeated failures");
+	}
+
+	private swapToCanvas(reason: string): void {
+		const host = this.host;
+		if (!host?.setRenderer) {
+			this.pendingCanvasFallback = true;
+			this.state = {
+				type: "webgl",
+				status: "degraded",
+				fallback: this.state.fallback,
+				reason,
+			};
+			this.emitStatus();
+			return;
+		}
+
 		try {
-			const renderer = webglRendererFactory();
+			host.setRenderer(undefined);
+			this.state = {
+				type: "canvas",
+				status: "active",
+				fallback: true,
+				reason,
+			};
+		} catch (err) {
+			this.state = {
+				type: "webgl",
+				status: "degraded",
+				fallback: this.state.fallback,
+				reason: `WebGL context lost and fallback swap failed: ${err instanceof Error ? err.message : String(err)}`,
+			};
+		}
+		this.emitStatus();
+	}
+
+	private emitStatus(): void {
+		this.onStatusChange?.(this.getState());
+	}
+
+	private selectInitialRenderer(): RendererResult {
+		if (this.mode === "canvas") {
+			return {
+				renderer: undefined,
+				type: "canvas",
+				fallback: false,
+				reason: "Canvas mode forced by setting",
+			};
+		}
+
+		const webgl2Available = isWebGL2Available();
+		if (this.mode === "webgl" && !webgl2Available) {
+			throw new Error(
+				"WebGL2 is not available in this environment, but 'webgl' mode was forced",
+			);
+		}
+		if (this.mode === "auto" && !webgl2Available) {
+			return {
+				renderer: undefined,
+				type: "canvas",
+				fallback: true,
+				reason: "WebGL2 not available",
+			};
+		}
+
+		if (!this.createWebglRenderer) {
+			if (this.mode === "webgl") {
+				throw new Error(
+					"WebGL mode was forced, but WebGL renderer is not bundled",
+				);
+			}
+			return {
+				renderer: undefined,
+				type: "canvas",
+				fallback: true,
+				reason: "WebGL renderer not bundled",
+			};
+		}
+
+		try {
+			const renderer = this.createWebglRenderer(() =>
+				this.handleWebglContextLoss(),
+			);
 			return {
 				renderer,
 				type: "webgl",
 				fallback: false,
 			};
 		} catch (err) {
-			// Auto mode - fall back to Canvas
-			if (mode === "auto") {
-				return {
-					renderer: undefined,
-					type: "canvas",
-					fallback: true,
-					reason: `WebGL renderer creation failed: ${err instanceof Error ? err.message : String(err)}`,
-				};
+			if (this.mode === "webgl") {
+				throw err;
 			}
-			// WebGL forced - propagate error
-			throw err;
+			return {
+				renderer: undefined,
+				type: "canvas",
+				fallback: true,
+				reason: `WebGL renderer creation failed: ${err instanceof Error ? err.message : String(err)}`,
+			};
 		}
 	}
-
-	// No WebGL renderer factory available
-	// At this point mode is either "auto" or "webgl"
-	if (mode === "webgl") {
-		// WebGL forced but factory missing - error per setting semantics
-		throw new Error("WebGL mode was forced, but WebGL renderer is not bundled");
-	}
-
-	// Auto mode - fall back to Canvas
-	return {
-		renderer: undefined,
-		type: "canvas",
-		fallback: true,
-		reason: "WebGL renderer not bundled",
-	};
 }

@@ -38,6 +38,32 @@ Run:
 npm run test:e2e
 ```
 
+WebGL-only run (skips Canvas2D-only tests):
+
+```
+BOOTTY_E2E_RENDERER=webgl npm run test:e2e
+```
+
+Notes:
+- `BOOTTY_E2E_RENDERER` accepts `auto`, `webgl`, or `canvas`.
+- On Linux/headless, WebGL may require SwiftShader:
+
+```
+BOOTTY_E2E_SWIFTSHADER=1 BOOTTY_E2E_RENDERER=webgl npm run test:e2e
+```
+
+- Increase terminal-ready timeout (useful on slower machines/CI):
+
+```
+BOOTTY_READY_TIMEOUT_MS=60000 BOOTTY_E2E_RENDERER=webgl npm run test:e2e
+```
+
+- To debug GPU issues, disable GPU:
+
+```
+BOOTTY_E2E_DISABLE_GPU=1 BOOTTY_E2E_RENDERER=webgl npm run test:e2e
+```
+
 ---
 
 ## Automation Coverage Map

@@ -335,11 +335,41 @@
 					"minimum": 0,
 					"description": "Max PTY output bytes to batch before posting to the webview. Set to 0 to disable size-based batching. Set both outputBatchMaxBytes and outputBatchMaxDelayMs to 0 to disable batching."
 				},
+				"bootty.pty.outputBatchMinBytes": {
+					"type": "number",
+					"default": 16,
+					"minimum": 0,
+					"description": "Minimum PTY output bytes to batch before posting to the webview. Small payloads are padded to this size to avoid postMessage drops. Set to 0 to disable the size floor (small messages may be dropped)."
+				},
 				"bootty.pty.outputBatchMaxDelayMs": {
 					"type": "number",
 					"default": 4,
 					"minimum": 0,
 					"description": "Max delay (ms) before flushing batched PTY output to the webview. Set to 0 to flush on next tick. Set both outputBatchMaxBytes and outputBatchMaxDelayMs to 0 to disable batching."
+				},
+				"bootty.pty.outputBatchMaxPendingMs": {
+					"type": "number",
+					"default": 100,
+					"minimum": 0,
+					"description": "Max time (ms) to keep batched PTY output waiting when below outputBatchMinBytes. Set to 0 to wait indefinitely for min bytes."
+				},
+				"bootty.pty.outputAckMaxBytes": {
+					"type": "number",
+					"default": 1024,
+					"minimum": 0,
+					"description": "Max PTY output bytes to require an ack from the webview. Set to 0 to disable ack retries for all messages."
+				},
+				"bootty.pty.outputAckRetryMs": {
+					"type": "number",
+					"default": 20,
+					"minimum": 0,
+					"description": "Retry delay (ms) for PTY output acks. Set to 0 to disable ack retries."
+				},
+				"bootty.pty.outputAckMaxAttempts": {
+					"type": "number",
+					"default": 5,
+					"minimum": 0,
+					"description": "Max resend attempts for PTY output when ack is missing. Set to 0 to disable ack retries."
 				},
 				"bootty.profile.outputPath": {
 					"type": "string",

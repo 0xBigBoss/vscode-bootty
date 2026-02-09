@@ -18,6 +18,14 @@ export type RendererStatus = "active" | "degraded";
 
 export type ProfileSource = "panel" | "editor";
 
+type PtyDebugValue = string | number | boolean | null;
+export type PtyDebugData = Record<string, PtyDebugValue>;
+export type PtyDebugScope =
+	| "extension"
+	| "panel-provider"
+	| "webview-editor"
+	| "webview-panel";
+
 export interface ProfileEvent {
 	name: string;
 	ts: number;
@@ -128,7 +136,13 @@ export interface TestSampleTrailingCellsResult {
 
 /** Extension -> Webview (editor terminals) */
 export type ExtensionMessage =
-	| { type: "pty-data"; terminalId: TerminalId; data: Uint8Array }
+	| {
+			type: "pty-data";
+			terminalId: TerminalId;
+			data: Uint8Array;
+			seq?: number;
+			padBytes?: number;
+	  }
 	| { type: "pty-exit"; terminalId: TerminalId; exitCode: number }
 	| { type: "resize"; terminalId: TerminalId; cols: number; rows: number }
 	| {
@@ -168,6 +182,12 @@ export type ExtensionMessage =
 			terminalId: TerminalId;
 			token: string;
 			payload: string;
+	  }
+	| {
+			type: "test-set-pty-drop";
+			terminalId: TerminalId;
+			dropEvery: number;
+			dropModulo?: number;
 	  }
 	| {
 			type: "update-settings";
@@ -254,6 +274,14 @@ export type PanelExtensionMessage =
 /** Webview -> Extension (editor terminals) */
 export type WebviewMessage =
 	| { type: "terminal-input"; terminalId: TerminalId; data: string }
+	| { type: "pty-ack"; terminalId: TerminalId; seq: number }
+	| {
+			type: "pty-debug-log";
+			scope: "webview-editor" | "webview-panel";
+			terminalId?: TerminalId;
+			message: string;
+			data?: PtyDebugData;
+	  }
 	| {
 			type: "terminal-resize";
 			terminalId: TerminalId;

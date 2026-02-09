@@ -87,6 +87,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Create terminal manager with panel provider
 	manager = new TerminalManager(context, panelProvider);
 	context.subscriptions.push(manager); // Auto-dispose on deactivate
+	panelProvider.setDebugLogSink(manager.getDebugLogSink());
 
 	// Set up message routing from panel to terminal manager
 	panelProvider.setMessageHandler((message) => {
@@ -424,6 +425,15 @@ export function activate(context: vscode.ExtensionContext) {
 					throw new Error("BooTTY: Terminal manager not initialized.");
 				}
 				manager.dispatchTestKeys(options);
+			},
+		),
+		vscode.commands.registerCommand(
+			"bootty.test.setPtyDrop",
+			(options?: unknown) => {
+				if (!manager) {
+					throw new Error("BooTTY: Terminal manager not initialized.");
+				}
+				manager.setTestPtyDrop(options);
 			},
 		),
 		vscode.commands.registerCommand(

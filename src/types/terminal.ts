@@ -29,6 +29,7 @@ interface TerminalInstanceBase {
 	readyTimeout?: ReturnType<typeof setTimeout>; // Timeout for ready signal
 	dataQueue: Uint8Array[]; // Buffer PTY data until ready (capped)
 	outputBuffer?: PtyOutputBuffer; // Buffered PTY output for batching
+	ptySeq?: number; // Monotonic sequence for PTY data messages
 	currentCwd?: string; // Current working directory (tracked via OSC 7)
 	title: string; // User-editable tab title
 	index?: number; // Auto-assigned index for "Terminal N" naming (reused on close)

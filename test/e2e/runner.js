@@ -551,8 +551,8 @@ async function run() {
       }
     }
 
-    // Skip direct write tests when using WebGL renderer (Canvas2D not available in headless)
-    if (forcedRenderer && forcedRenderer !== "canvas") {
+    // Skip direct write tests when WebGL is explicitly forced (Canvas2D sampling unavailable)
+    if (forcedRenderer === "webgl") {
       console.warn(
         `[bootty e2e] Renderer forced to ${forcedRenderer}; skipping direct write tests (require Canvas2D).`,
       );
@@ -578,244 +578,262 @@ async function run() {
       5,
       READY_TIMEOUT_MS,
     );
-    assert.ok(!directSample?.error, directSample?.error ?? "direct sample error");
-    assert.equal(directSample.cells.length, 5, "Expected 5 sampled cells");
-    const directText = directSample.cells.map((cell) => cell.char).join("");
-    assert.equal(directText, "helXY", "Direct redraw text mismatch");
-    for (const cell of directSample.cells) {
-      assert.equal(
-        cell.hasInk,
-        true,
-        `Expected ink for col ${cell.col} char ${cell.char}`,
+    if (directSample?.error === "canvas-2d-unavailable") {
+      console.warn(
+        "[bootty e2e] Direct write tests require Canvas2D sampling; renderer does not expose 2D context. Skipping direct write sampling checks.",
       );
-    }
-
-    const backspaceCases = [
-      {
-        name: "backspace-basic",
-        payload: "AB\bC",
-        expected: "AC",
-        sampleLen: 2,
-      },
-      {
-        name: "backspace-multi",
-        payload: "ABC\b\bDE",
-        expected: "ADE",
-        sampleLen: 3,
-      },
-      {
-        name: "backspace-start",
-        payload: "\bA",
-        expected: "A",
-        sampleLen: 1,
-      },
-      {
-        name: "backspace-sgr",
-        payload: "AB\b\x1b[31mC\x1b[0m",
-        expected: "AC",
-        sampleLen: 2,
-      },
-    ];
-
-    for (const testCase of backspaceCases) {
-      const sampleLen = testCase.sampleLen;
-      const backspacePayload = [
-        "\x1b[2J\x1b[H",
-        testCase.payload,
-        "\x1b[H",
-        `\x1b[${sampleLen}C`,
-      ].join("");
-      await directWrite(directTerminalId, backspacePayload, READY_TIMEOUT_MS);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const backspaceSample = await sampleTrailingCells(
-        directTerminalId,
-        sampleLen,
-        READY_TIMEOUT_MS,
-      );
-      assert.ok(
-        !backspaceSample?.error,
-        backspaceSample?.error ?? `${testCase.name} sample error`,
-      );
-      assert.equal(
-        backspaceSample.cells.length,
-        sampleLen,
-        `${testCase.name} sample length mismatch`,
-      );
-      const backspaceText = backspaceSample.cells
-        .map((cell) => cell.char)
-        .join("");
-      assert.equal(
-        backspaceText,
-        testCase.expected,
-        `${testCase.name} text mismatch`,
-      );
-      for (const cell of backspaceSample.cells) {
-        if (cell.char && cell.char !== " ") {
-          assert.equal(
-            cell.hasInk,
-            true,
-            `Expected ink for col ${cell.col} char ${cell.char} (${testCase.name})`,
-          );
-        }
-      }
-    }
-
-    const zshExpected = "echo hello world";
-    const zshPayload = [
-      "\x1b[2J\x1b[H",
-      "echo ",
-      "h",
-      "\b",
-      "\x1b[1m\x1b[31m",
-      "h",
-      "\x1b[0m\x1b[39m",
-      "ello ",
-      "world",
-      "\x1b[5D",
-      "\x1b[90m",
-      "world",
-      "\x1b[39m",
-      "\x1b[5D",
-      "\x1b[5C",
-      "\x1b[H",
-      `\x1b[${zshExpected.length}C`,
-    ].join("");
-    await directWrite(directTerminalId, zshPayload, READY_TIMEOUT_MS);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const zshSample = await sampleTrailingCells(
-      directTerminalId,
-      zshExpected.length,
-      READY_TIMEOUT_MS,
-    );
-    assert.ok(!zshSample?.error, zshSample?.error ?? "zsh sample error");
-    assert.equal(
-      zshSample.cells.length,
-      zshExpected.length,
-      "Expected zsh sample length",
-    );
-    const zshText = zshSample.cells.map((cell) => cell.char).join("");
-    assert.equal(zshText, zshExpected, "Zsh-like redraw text mismatch");
-    for (const cell of zshSample.cells) {
-      if (cell.char && cell.char !== " ") {
+    } else {
+      assert.ok(!directSample?.error, directSample?.error ?? "direct sample error");
+      assert.equal(directSample.cells.length, 5, "Expected 5 sampled cells");
+      const directText = directSample.cells.map((cell) => cell.char).join("");
+      assert.equal(directText, "helXY", "Direct redraw text mismatch");
+      for (const cell of directSample.cells) {
         assert.equal(
           cell.hasInk,
           true,
           `Expected ink for col ${cell.col} char ${cell.char}`,
         );
       }
-    }
 
-    // Test zsh autosuggestion backspace sequences (from real PTY capture)
-    // This exercises the normalizeBackspace fix - zsh sends raw backspaces
-    // which must be converted to CSI cursor left for correct rendering
-    const zshAutoExpected = "echo hello world";
-    const zshAutoPayload = [
-      "\x1b[2J\x1b[H", // Clear screen, cursor home
-      // Simulates typing "e" then zsh redraws with autosuggestion
-      "e",
-      "\b", // backspace - zsh erases to redraw with color
-      "\x1b[1m\x1b[31me\x1b[0m\x1b[39m", // bold red "e"
-      "\b", // backspace again for another redraw cycle
-      "\x1b[1m\x1b[31me\x1b[0m\x1b[39m", // bold red "e" again
-      "\x1b[90mcho hello world\x1b[39m", // faint gray autosuggestion
-      "\x1b[15D", // cursor back to after "e"
-      // Now accept the autosuggestion (type rest normally)
-      "\b\b\b\b", // multiple backspaces (zsh editing)
-      "\x1b[0m\x1b[32mecho\x1b[39m", // green "echo"
-      " hello world", // rest of text
-      "\x1b[H", // cursor home
-      `\x1b[${zshAutoExpected.length}C`, // move cursor to end
-    ].join("");
-    await directWrite(directTerminalId, zshAutoPayload, READY_TIMEOUT_MS);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const zshAutoSample = await sampleTrailingCells(
-      directTerminalId,
-      zshAutoExpected.length,
-      READY_TIMEOUT_MS,
-    );
-    assert.ok(!zshAutoSample?.error, zshAutoSample?.error ?? "zsh auto sample error");
-    assert.equal(
-      zshAutoSample.cells.length,
-      zshAutoExpected.length,
-      "Expected zsh auto sample length",
-    );
-    const zshAutoText = zshAutoSample.cells.map((cell) => cell.char).join("");
-    assert.equal(zshAutoText, zshAutoExpected, "Zsh autosuggestion backspace handling mismatch");
-    for (const cell of zshAutoSample.cells) {
-      if (cell.char && cell.char !== " ") {
-        assert.equal(
-          cell.hasInk,
-          true,
-          `Expected ink for col ${cell.col} char ${cell.char} (zsh auto test)`,
+      const backspaceCases = [
+        {
+          name: "backspace-basic",
+          payload: "AB\bC",
+          expected: "AC",
+          sampleLen: 2,
+        },
+        {
+          name: "backspace-multi",
+          payload: "ABC\b\bDE",
+          expected: "ADE",
+          sampleLen: 3,
+        },
+        {
+          name: "backspace-start",
+          payload: "\bA",
+          expected: "A",
+          sampleLen: 1,
+        },
+        {
+          name: "backspace-sgr",
+          payload: "AB\b\x1b[31mC\x1b[0m",
+          expected: "AC",
+          sampleLen: 2,
+        },
+      ];
+
+      for (const testCase of backspaceCases) {
+        const sampleLen = testCase.sampleLen;
+        const backspacePayload = [
+          "\x1b[2J\x1b[H",
+          testCase.payload,
+          "\x1b[H",
+          `\x1b[${sampleLen}C`,
+        ].join("");
+        await directWrite(directTerminalId, backspacePayload, READY_TIMEOUT_MS);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const backspaceSample = await sampleTrailingCells(
+          directTerminalId,
+          sampleLen,
+          READY_TIMEOUT_MS,
         );
+        assert.ok(
+          !backspaceSample?.error,
+          backspaceSample?.error ?? `${testCase.name} sample error`,
+        );
+        assert.equal(
+          backspaceSample.cells.length,
+          sampleLen,
+          `${testCase.name} sample length mismatch`,
+        );
+        const backspaceText = backspaceSample.cells
+          .map((cell) => cell.char)
+          .join("");
+        assert.equal(
+          backspaceText,
+          testCase.expected,
+          `${testCase.name} text mismatch`,
+        );
+        for (const cell of backspaceSample.cells) {
+          if (cell.char && cell.char !== " ") {
+            assert.equal(
+              cell.hasInk,
+              true,
+              `Expected ink for col ${cell.col} char ${cell.char} (${testCase.name})`,
+            );
+          }
+        }
       }
-    }
 
-    // Test rapid multi-write PTY pattern (from real zsh capture)
-    // This tests the timing-sensitive case where renders may happen between writes
-    const rapidExpected = "echo hello";
-    await directWrite(directTerminalId, "\x1b[2J\x1b[H", READY_TIMEOUT_MS); // Clear and home
-    // Send first character
-    await directWrite(directTerminalId, "e", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5)); // Small delay to allow potential render
-    // Send backspace + styled 'e' (as zsh does)
-    await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Send more backspace redraw cycles (from capture)
-    await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[0m\x1b[39m\x1b[90mxit\x1b[39m\b\b\b", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Type 'c' with redraw
-    await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[1m\x1b[31mc\x1b[0m\x1b[39m\x1b[39m \x1b[39m \b\b", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Autosuggestion appears
-    await directWrite(directTerminalId, "\x1b[90mho BOOTTY_KEY_BACKSPACE_TEST\x1b[39m\x1b[28D", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Type 'h' with backspaces
-    await directWrite(directTerminalId, "\b\b\x1b[1m\x1b[31me\x1b[1m\x1b[31mc\x1b[1m\x1b[31mh\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Type 'o' with backspaces
-    await directWrite(directTerminalId, "\b\x1b[1m\x1b[31mh\x1b[1m\x1b[31mo\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Convert to green "echo" with backspaces
-    await directWrite(directTerminalId, "\b\b\b\b\x1b[0m\x1b[32me\x1b[0m\x1b[32mc\x1b[0m\x1b[32mh\x1b[0m\x1b[32mo\x1b[39m", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Type space and more
-    await directWrite(directTerminalId, "\b\x1b[32mo\x1b[32m \x1b[39m", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    await directWrite(directTerminalId, "\b\b\x1b[32mo\x1b[39m\x1b[39m ", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Clear autosuggestion and write "hello"
-    await directWrite(directTerminalId, "\x1b[39mh\x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[24D", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    await directWrite(directTerminalId, "\x1b[90mello world\x1b[39m\x1b[10D", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    // Type 'e', 'l', 'l', 'o'
-    await directWrite(directTerminalId, "\x1b[39me", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    await directWrite(directTerminalId, "\x1b[39ml", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    await directWrite(directTerminalId, "\x1b[39ml", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 5));
-    await directWrite(directTerminalId, "\x1b[39mo", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 100)); // Final settle
-    // Position cursor at end for sampling
-    await directWrite(directTerminalId, "\x1b[H\x1b[" + rapidExpected.length + "C", READY_TIMEOUT_MS);
-    await new Promise((r) => setTimeout(r, 100));
-    const rapidSample = await sampleTrailingCells(
-      directTerminalId,
-      rapidExpected.length,
-      READY_TIMEOUT_MS,
-    );
-    assert.ok(!rapidSample?.error, rapidSample?.error ?? "rapid multi-write sample error");
-    const rapidText = rapidSample.cells.map((cell) => cell.char).join("");
-    assert.equal(rapidText, rapidExpected, "Rapid multi-write PTY pattern text mismatch: got '" + rapidText + "' expected '" + rapidExpected + "'");
-    for (const cell of rapidSample.cells) {
-      if (cell.char && cell.char !== " ") {
-        assert.equal(
-          cell.hasInk,
-          true,
-          `Expected ink for col ${cell.col} char ${cell.char} (rapid multi-write)`,
-        );
+      const zshExpected = "echo hello world";
+      const zshPayload = [
+        "\x1b[2J\x1b[H",
+        "echo ",
+        "h",
+        "\b",
+        "\x1b[1m\x1b[31m",
+        "h",
+        "\x1b[0m\x1b[39m",
+        "ello ",
+        "world",
+        "\x1b[5D",
+        "\x1b[90m",
+        "world",
+        "\x1b[39m",
+        "\x1b[5D",
+        "\x1b[5C",
+        "\x1b[H",
+        `\x1b[${zshExpected.length}C`,
+      ].join("");
+      await directWrite(directTerminalId, zshPayload, READY_TIMEOUT_MS);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const zshSample = await sampleTrailingCells(
+        directTerminalId,
+        zshExpected.length,
+        READY_TIMEOUT_MS,
+      );
+      assert.ok(!zshSample?.error, zshSample?.error ?? "zsh sample error");
+      assert.equal(
+        zshSample.cells.length,
+        zshExpected.length,
+        "Expected zsh sample length",
+      );
+      const zshText = zshSample.cells.map((cell) => cell.char).join("");
+      assert.equal(zshText, zshExpected, "Zsh-like redraw text mismatch");
+      for (const cell of zshSample.cells) {
+        if (cell.char && cell.char !== " ") {
+          assert.equal(
+            cell.hasInk,
+            true,
+            `Expected ink for col ${cell.col} char ${cell.char}`,
+          );
+        }
+      }
+
+      // Test zsh autosuggestion backspace sequences (from real PTY capture)
+      // This exercises the normalizeBackspace fix - zsh sends raw backspaces
+      // which must be converted to CSI cursor left for correct rendering
+      const zshAutoExpected = "echo hello world";
+      const zshAutoPayload = [
+        "\x1b[2J\x1b[H", // Clear screen, cursor home
+        // Simulates typing "e" then zsh redraws with autosuggestion
+        "e",
+        "\b", // backspace - zsh erases to redraw with color
+        "\x1b[1m\x1b[31me\x1b[0m\x1b[39m", // bold red "e"
+        "\b", // backspace again for another redraw cycle
+        "\x1b[1m\x1b[31me\x1b[0m\x1b[39m", // bold red "e" again
+        "\x1b[90mcho hello world\x1b[39m", // faint gray autosuggestion
+        "\x1b[15D", // cursor back to after "e"
+        // Now accept the autosuggestion (type rest normally)
+        "\b\b\b\b", // multiple backspaces (zsh editing)
+        "\x1b[0m\x1b[32mecho\x1b[39m", // green "echo"
+        " hello world", // rest of text
+        "\x1b[H", // cursor home
+        `\x1b[${zshAutoExpected.length}C`, // move cursor to end
+      ].join("");
+      await directWrite(directTerminalId, zshAutoPayload, READY_TIMEOUT_MS);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const zshAutoSample = await sampleTrailingCells(
+        directTerminalId,
+        zshAutoExpected.length,
+        READY_TIMEOUT_MS,
+      );
+      assert.ok(!zshAutoSample?.error, zshAutoSample?.error ?? "zsh auto sample error");
+      assert.equal(
+        zshAutoSample.cells.length,
+        zshAutoExpected.length,
+        "Expected zsh auto sample length",
+      );
+      const zshAutoText = zshAutoSample.cells.map((cell) => cell.char).join("");
+      assert.equal(
+        zshAutoText,
+        zshAutoExpected,
+        "Zsh autosuggestion backspace handling mismatch",
+      );
+      for (const cell of zshAutoSample.cells) {
+        if (cell.char && cell.char !== " ") {
+          assert.equal(
+            cell.hasInk,
+            true,
+            `Expected ink for col ${cell.col} char ${cell.char} (zsh auto test)`,
+          );
+        }
+      }
+
+      // Test rapid multi-write PTY pattern (from real zsh capture)
+      // This tests the timing-sensitive case where renders may happen between writes
+      const rapidExpected = "echo hello";
+      await directWrite(directTerminalId, "\x1b[2J\x1b[H", READY_TIMEOUT_MS); // Clear and home
+      // Send first character
+      await directWrite(directTerminalId, "e", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5)); // Small delay to allow potential render
+      // Send backspace + styled 'e' (as zsh does)
+      await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Send more backspace redraw cycles (from capture)
+      await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[0m\x1b[39m\x1b[90mxit\x1b[39m\b\b\b", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Type 'c' with redraw
+      await directWrite(directTerminalId, "\b\x1b[1m\x1b[31me\x1b[1m\x1b[31mc\x1b[0m\x1b[39m\x1b[39m \x1b[39m \b\b", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Autosuggestion appears
+      await directWrite(directTerminalId, "\x1b[90mho BOOTTY_KEY_BACKSPACE_TEST\x1b[39m\x1b[28D", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Type 'h' with backspaces
+      await directWrite(directTerminalId, "\b\b\x1b[1m\x1b[31me\x1b[1m\x1b[31mc\x1b[1m\x1b[31mh\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Type 'o' with backspaces
+      await directWrite(directTerminalId, "\b\x1b[1m\x1b[31mh\x1b[1m\x1b[31mo\x1b[0m\x1b[39m", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Convert to green "echo" with backspaces
+      await directWrite(directTerminalId, "\b\b\b\b\x1b[0m\x1b[32me\x1b[0m\x1b[32mc\x1b[0m\x1b[32mh\x1b[0m\x1b[32mo\x1b[39m", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Type space and more
+      await directWrite(directTerminalId, "\b\x1b[32mo\x1b[32m \x1b[39m", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      await directWrite(directTerminalId, "\b\b\x1b[32mo\x1b[39m\x1b[39m ", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Clear autosuggestion and write "hello"
+      await directWrite(directTerminalId, "\x1b[39mh\x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[39m \x1b[24D", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      await directWrite(directTerminalId, "\x1b[90mello world\x1b[39m\x1b[10D", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      // Type 'e', 'l', 'l', 'o'
+      await directWrite(directTerminalId, "\x1b[39me", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      await directWrite(directTerminalId, "\x1b[39ml", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      await directWrite(directTerminalId, "\x1b[39ml", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 5));
+      await directWrite(directTerminalId, "\x1b[39mo", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 100)); // Final settle
+      // Position cursor at end for sampling
+      await directWrite(directTerminalId, "\x1b[H\x1b[" + rapidExpected.length + "C", READY_TIMEOUT_MS);
+      await new Promise((r) => setTimeout(r, 100));
+      const rapidSample = await sampleTrailingCells(
+        directTerminalId,
+        rapidExpected.length,
+        READY_TIMEOUT_MS,
+      );
+      assert.ok(!rapidSample?.error, rapidSample?.error ?? "rapid multi-write sample error");
+      const rapidText = rapidSample.cells.map((cell) => cell.char).join("");
+      assert.equal(
+        rapidText,
+        rapidExpected,
+        "Rapid multi-write PTY pattern text mismatch: got '" +
+          rapidText +
+          "' expected '" +
+          rapidExpected +
+          "'",
+      );
+      for (const cell of rapidSample.cells) {
+        if (cell.char && cell.char !== " ") {
+          assert.equal(
+            cell.hasInk,
+            true,
+            `Expected ink for col ${cell.col} char ${cell.char} (rapid multi-write)`,
+          );
+        }
       }
     }
 
@@ -1012,6 +1030,44 @@ async function run() {
       throw error;
     }
 
+    // Press Enter to clear for next test
+    await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+      terminalId: echoTestTerminalId,
+      keys: [{ key: "Enter", code: "Enter" }],
+    });
+    await waitForText({
+      terminalId: echoTestTerminalId,
+      text: echoPrompt,
+      timeoutMs: READY_TIMEOUT_MS,
+    });
+
+    // TEST 5: Short burst then pause (<4 chars)
+    // This reproduces the edge case where small batches never flush.
+    console.log("TEST 5: Short burst then pause (<=3 chars)...");
+    const shortPauseMarker = "Z9q"; // 3 chars to stay below min batch bytes
+    const shortPauseKeys = buildKeyEventsFromText(shortPauseMarker);
+    for (const keyEvent of shortPauseKeys) {
+      await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+        terminalId: echoTestTerminalId,
+        keys: [keyEvent],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    // Wait longer than the max pending cap so forced flush can occur.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    try {
+      await waitForText({
+        terminalId: echoTestTerminalId,
+        text: shortPauseMarker,
+        timeoutMs: 3000,
+      });
+      console.log("TEST 5: Short pause PASSED - echo found in buffer");
+    } catch (error) {
+      console.error(`ECHO BUG DETECTED: Short-typed "${shortPauseMarker}" not found after pause`);
+      throw error;
+    }
+
     // Stop trace and analyze
     await new Promise((resolve) => setTimeout(resolve, 200));
     const echoTrace = await stopPipelineTrace(echoTestTerminalId);
@@ -1043,6 +1099,43 @@ async function run() {
     }
     assertTraceStagesPresent(echoTrace, echoExpectedStages);
     console.log("Echo pipeline trace verification PASSED");
+
+    // TEST 6: Simulated webview drops (every other PTY message)
+    // Configure the webview to drop every other pty-data message.
+    console.log("TEST 6: Simulated webview drop (every other message)...");
+    await vscode.commands.executeCommand("bootty.test.setPtyDrop", {
+      terminalId: echoTestTerminalId,
+      dropEvery: 2,
+      dropModulo: 1, // drop the first of each pair
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const dropMarker = "DROP_7n4x";
+    const dropKeys = buildKeyEventsFromText(dropMarker);
+    for (const keyEvent of dropKeys) {
+      await vscode.commands.executeCommand("bootty.test.dispatchKeys", {
+        terminalId: echoTestTerminalId,
+        keys: [keyEvent],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    try {
+      await waitForText({
+        terminalId: echoTestTerminalId,
+        text: dropMarker,
+        timeoutMs: 5000,
+      });
+      console.log("TEST 6: Simulated drop PASSED - echo found in buffer");
+    } catch (error) {
+      console.error(`ECHO BUG DETECTED: Simulated drop "${dropMarker}" not found`);
+      throw error;
+    } finally {
+      await vscode.commands.executeCommand("bootty.test.setPtyDrop", {
+        terminalId: echoTestTerminalId,
+        dropEvery: 0,
+      });
+    }
 
     // Cleanup echo test terminal
     await vscode.commands.executeCommand("bootty.test.destroyTerminal", {

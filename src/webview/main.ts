@@ -32,12 +32,12 @@ import {
 import type {
 	ExtensionMessage,
 	RendererMode,
-	RendererStatus,
 	RendererType,
 	RuntimeConfig,
 	TerminalTheme,
 	TestSampleCell,
 	TestSampleTrailingCellsResult,
+	WebviewMessage,
 } from "../types/messages";
 import type { TerminalId } from "../types/terminal";
 // Import modular components
@@ -46,13 +46,13 @@ import {
 	FILE_PATH_PATTERN_SINGLE,
 } from "./file-link-provider";
 import { createProfileCollector } from "./profile-collector";
-import type { RendererResult } from "./renderer-utils";
-import { createRenderer } from "./renderer-utils";
+import { RendererBackendController } from "./renderer-utils";
 import { createSearchController } from "./search-controller";
 import { createThemeObserver, getVSCodeThemeColors } from "./theme-utils";
 
 const logPty = debug("bootty:webview:pty");
 const logInput = debug("bootty:webview:input");
+const PTY_SEQ_DEDUPE_HISTORY = 4096;
 
 const utf8Decoder = new TextDecoder("utf-8");
 function previewBytes(bytes: Uint8Array, limit = 256): string {
@@ -228,9 +228,24 @@ const boottyInit = async (): Promise<void> => {
 
 	// Track current renderer info for status reporting
 	let currentRendererType: RendererType = "canvas";
-	let currentRendererStatus: RendererStatus = "active";
 	let rendererFallback = false;
 	let rendererReason: string | undefined;
+	let canReportRendererStatus = false;
+	let ptyDebugEnabled = Boolean(storedDebug && storedDebug.trim().length > 0);
+
+	function postPtyDebug(
+		message: string,
+		data?: Record<string, string | number | boolean | null>,
+	): void {
+		if (!ptyDebugEnabled) return;
+		vscode.postMessage({
+			type: "pty-debug-log",
+			scope: "webview-editor",
+			terminalId: TERMINAL_ID,
+			message,
+			data,
+		} satisfies WebviewMessage);
+	}
 
 	// Restore persisted state (survives tab switches due to retainContextWhenHidden,
 	// and partial state survives window moves via VS Code's webview state API)
@@ -431,41 +446,45 @@ const boottyInit = async (): Promise<void> => {
 		return matches;
 	}
 
-	// Create renderer based on mode
-	let rendererResult: RendererResult;
-	try {
-		rendererResult = createRenderer(
-			RENDERER_MODE,
-			() =>
-				new WebGLRenderer({
-					onContextLoss: () => {
-						// WebGL context lost after repeated failures - renderer is degraded
-						// Note: The terminal still uses the WebGL renderer (no runtime swap),
-						// but it's no longer rendering. Report accurate status.
-						console.warn("[bootty] WebGL context lost - renderer degraded");
-						currentRendererStatus = "degraded";
-						rendererReason = "WebGL context lost after repeated failures";
-						vscode.postMessage({
-							type: "renderer-status",
-							terminalId: TERMINAL_ID,
-							renderer: currentRendererType, // Still "webgl" - no actual swap
-							status: "degraded",
-							fallback: rendererFallback,
-							reason: "WebGL context lost after repeated failures",
-						});
-					},
-				}),
-		);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		console.warn("[bootty] WebGL renderer init failed:", message);
-		rendererResult = {
-			renderer: undefined,
-			type: "canvas",
-			fallback: true,
-			reason: `WebGL renderer init failed: ${message}`,
-		};
-	}
+	const backendController = new RendererBackendController({
+		mode: RENDERER_MODE,
+		createWebglRenderer: (onContextLoss) =>
+			new WebGLRenderer({
+				onContextLoss,
+			}),
+		onStatusChange: (state) => {
+			currentRendererType = state.type;
+			rendererFallback = state.fallback;
+			rendererReason = state.reason;
+			if (!canReportRendererStatus) return;
+			vscode.postMessage({
+				type: "renderer-status",
+				terminalId: TERMINAL_ID,
+				renderer: state.type,
+				status: state.status,
+				fallback: state.fallback,
+				reason: state.reason,
+			});
+		},
+	});
+
+	const rendererResult = (() => {
+		try {
+			return backendController.initialize();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			if (RENDERER_MODE === "webgl") {
+				throw new Error(`WebGL renderer init failed: ${message}`);
+			}
+			console.warn("[bootty] WebGL renderer init failed:", message);
+			return {
+				renderer: undefined,
+				type: "canvas" as RendererType,
+				fallback: true,
+				reason: `WebGL renderer init failed: ${message}`,
+			};
+		}
+	})();
 
 	currentRendererType = rendererResult.type;
 	rendererFallback = rendererResult.fallback;
@@ -517,6 +536,11 @@ const boottyInit = async (): Promise<void> => {
 		termOptions.ghostty = ghosttyInstance;
 	}
 	const term = new Terminal(termOptions);
+	backendController.bindHost(
+		term as unknown as {
+			setRenderer?: (renderer?: unknown) => void;
+		},
+	);
 
 	// Get FitAddon from ghostty-web module
 	const FitAddon = GhosttyModule.FitAddon || GhosttyModule.default?.FitAddon;
@@ -698,6 +722,11 @@ const boottyInit = async (): Promise<void> => {
 	let currentScrollOffset = 0;
 	let ptyQueueBytes = 0;
 	let ptyQueueSegments = 0;
+	let ptyDropEvery = 0;
+	let ptyDropModulo = 0;
+	let ptyDropCounter = 0;
+	const seenPtySeqOrder: number[] = [];
+	const seenPtySeqs = new Set<number>();
 	let ptyFlushPending = false;
 	let ptyDrainInFlight = false;
 	let ptyDrainQueued = false;
@@ -1047,6 +1076,26 @@ const boottyInit = async (): Promise<void> => {
 		requestAnimationFrame(() => waitForPtyIdle(onIdle));
 	}
 
+	function shouldDropPtyMessage(): boolean {
+		if (ptyDropEvery <= 0) return false;
+		ptyDropCounter += 1;
+		return (ptyDropCounter + ptyDropModulo) % ptyDropEvery === 0;
+	}
+
+	function isDuplicatePtySeq(seq: number | undefined): boolean {
+		if (typeof seq !== "number") return false;
+		if (seenPtySeqs.has(seq)) return true;
+		seenPtySeqs.add(seq);
+		seenPtySeqOrder.push(seq);
+		if (seenPtySeqOrder.length > PTY_SEQ_DEDUPE_HISTORY) {
+			const oldestSeq = seenPtySeqOrder.shift();
+			if (typeof oldestSeq === "number") {
+				seenPtySeqs.delete(oldestSeq);
+			}
+		}
+		return false;
+	}
+
 	function schedulePtyFlush(): void {
 		if (ptyFlushPending) return;
 		ptyFlushPending = true;
@@ -1278,11 +1327,47 @@ const boottyInit = async (): Promise<void> => {
 				});
 				break;
 			}
+			case "test-set-pty-drop": {
+				ptyDropEvery =
+					typeof msg.dropEvery === "number" && Number.isFinite(msg.dropEvery)
+						? Math.max(0, Math.floor(msg.dropEvery))
+						: 0;
+				ptyDropModulo =
+					typeof msg.dropModulo === "number" && Number.isFinite(msg.dropModulo)
+						? Math.max(0, Math.floor(msg.dropModulo))
+						: 0;
+				ptyDropCounter = 0;
+				seenPtySeqOrder.length = 0;
+				seenPtySeqs.clear();
+				break;
+			}
 			case "pty-data": {
-				if (msg.data.byteLength > 0) {
+				if (shouldDropPtyMessage()) break;
+				const isDuplicate = isDuplicatePtySeq(msg.seq);
+				if (typeof msg.seq === "number") {
+					vscode.postMessage({
+						type: "pty-ack",
+						terminalId: TERMINAL_ID,
+						seq: msg.seq,
+					});
+				}
+				if (isDuplicate) break;
+				const data = msg.padBytes
+					? msg.data.subarray(
+							0,
+							Math.max(0, msg.data.byteLength - msg.padBytes),
+						)
+					: msg.data;
+				postPtyDebug("webview-recv", {
+					bytes: data.byteLength,
+					seq: typeof msg.seq === "number" ? msg.seq : null,
+					padBytes: typeof msg.padBytes === "number" ? msg.padBytes : null,
+					duplicate: isDuplicate,
+				});
+				if (data.byteLength > 0) {
 					if (suppressPtyDuringDirectWrite) break;
-					pendingPtyMerge.push(msg.data);
-					pendingPtyMergeBytes += msg.data.byteLength;
+					pendingPtyMerge.push(data);
+					pendingPtyMergeBytes += data.byteLength;
 					if (!ptyMergeScheduled) {
 						ptyMergeScheduled = true;
 						queueMicrotask(flushMergedPtyData);
@@ -1305,6 +1390,7 @@ const boottyInit = async (): Promise<void> => {
 				ptyMergeScheduled = false;
 				ptyDrainInFlight = false;
 				ptyDrainQueued = false;
+				ptyDropCounter = 0;
 				const termApi = term as unknown as {
 					getViewportY?: () => number;
 					getScrollbackLength?: () => number;
@@ -1411,9 +1497,11 @@ const boottyInit = async (): Promise<void> => {
 				runtimeConfigUpdated = true;
 				// Enable/disable debug logging dynamically
 				// Note: localStorage is also set for persistence across reloads
-				if (msg.config.debugLog) {
-					localStorage.setItem("debug", msg.config.debugLog);
-					debug.enable(msg.config.debugLog);
+				const debugLog = msg.config.debugLog.trim();
+				ptyDebugEnabled = debugLog.length > 0;
+				if (ptyDebugEnabled) {
+					localStorage.setItem("debug", debugLog);
+					debug.enable(debugLog);
 				} else {
 					localStorage.removeItem("debug");
 					debug.disable();
@@ -1475,13 +1563,15 @@ const boottyInit = async (): Promise<void> => {
 	});
 
 	// Report renderer status to extension
+	canReportRendererStatus = true;
+	const rendererState = backendController.getState();
 	vscode.postMessage({
 		type: "renderer-status",
 		terminalId: TERMINAL_ID,
-		renderer: currentRendererType,
-		status: currentRendererStatus,
-		fallback: rendererFallback,
-		reason: rendererReason,
+		renderer: rendererState.type,
+		status: rendererState.status,
+		fallback: rendererState.fallback,
+		reason: rendererState.reason,
 	});
 
 	// Send input to PTY

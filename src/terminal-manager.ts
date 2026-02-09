@@ -3,8 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import type { BooTTYPanelViewProvider } from "./panel-view-provider";
+import type {
+	BooTTYPanelViewProvider,
+	PanelDebugLogSink,
+} from "./panel-view-provider";
 import { ProfileWriter } from "./profile-writer";
+import { PtyDebugWriter } from "./pty-debug-writer";
 import { PtyService } from "./pty-service";
 import {
 	createVSCodeConfigGetter,
@@ -27,6 +31,8 @@ import type {
 	PanelWebviewMessage,
 	PipelineTraceEvent,
 	ProfileEvent,
+	PtyDebugData,
+	PtyDebugScope,
 	RendererMode,
 	RuntimeConfig,
 	TerminalGroup,
@@ -306,6 +312,20 @@ interface TestDirectWriteOptions {
 	timeoutMs?: number;
 }
 
+interface TestSetPtyDropOptions {
+	terminalId?: TerminalId;
+	dropEvery?: number;
+	dropModulo?: number;
+}
+
+interface PendingPtyAck {
+	seq: number;
+	message: ExtensionMessage;
+	payloadBytes: number;
+	attempts: number;
+	timeoutId?: ReturnType<typeof setTimeout>;
+}
+
 interface TestDirectWriteWatcher {
 	resolve: () => void;
 	reject: (error: Error) => void;
@@ -340,6 +360,7 @@ const PROFILE_OUTPUT_SUBDIR = "bootty-profiles";
 const PROFILE_FILE_PREFIX = "bootty-profile";
 const PROFILE_FILE_EXTENSION = ".jsonl";
 const PROFILE_STOP_GRACE_MS = 300;
+const PTY_DEBUG_FILE_PREFIX = "bootty-pty-debug";
 
 export class TerminalManager implements vscode.Disposable {
 	private terminals = new Map<TerminalId, TerminalInstance>();
@@ -364,6 +385,10 @@ export class TerminalManager implements vscode.Disposable {
 	private usedIndices = new Set<number>(); // Track used indices for reuse
 	private outputChannel: vscode.OutputChannel;
 	private profileSession?: ProfileSession;
+	private ptyDebugWriter?: PtyDebugWriter;
+	private ptyDebugSyncToken = 0;
+	private ptyDebugInitInFlight = false;
+	private ptyDebugStartedAt = Date.now();
 	private benchmarkWatchers = new Map<TerminalId, BenchmarkWatcher>();
 	private benchmarkCommandWatchers = new Map<
 		TerminalId,
@@ -384,10 +409,17 @@ export class TerminalManager implements vscode.Disposable {
 		TestSampleTrailingCellsWatcher
 	>();
 	private testDirectWriteWatchers = new Map<string, TestDirectWriteWatcher>();
+	private pendingPtyAcks = new Map<TerminalId, Map<number, PendingPtyAck>>();
+	private pendingOrderedPtyData = new Map<TerminalId, Uint8Array[]>();
 	private readonly ptyDecoder = new TextDecoder("utf-8");
 	private ptyOutputBatchConfig: {
 		maxBytes: number;
 		maxDelayMs: number;
+		minBytes: number;
+		maxPendingMs: number;
+		ackMaxBytes: number;
+		ackRetryMs: number;
+		ackMaxAttempts: number;
 	};
 	// Debug flag for batch config logging
 	private _batchConfigLogged = false;
@@ -415,6 +447,8 @@ export class TerminalManager implements vscode.Disposable {
 		this.ptyService = new PtyService();
 		this.outputChannel = vscode.window.createOutputChannel("BooTTY");
 		this.ptyOutputBatchConfig = this.resolvePtyOutputBatchConfig();
+		this.ptyDebugStartedAt = Date.now();
+		void this.syncPtyDebugWriter();
 
 		// Restore persisted state
 		this.loadPersistedState();
@@ -430,6 +464,9 @@ export class TerminalManager implements vscode.Disposable {
 					this.ptyOutputBatchConfig = this.resolvePtyOutputBatchConfig();
 					this.broadcastSettingsUpdate();
 				}
+				if (e.affectsConfiguration("bootty.debugLog")) {
+					void this.syncPtyDebugWriter();
+				}
 				// Theme colors from workbench.colorCustomizations
 				if (e.affectsConfiguration("workbench.colorCustomizations")) {
 					this.broadcastThemeUpdate();
@@ -443,6 +480,103 @@ export class TerminalManager implements vscode.Disposable {
 				this.broadcastThemeUpdate();
 			}),
 		);
+	}
+
+	getDebugLogSink(): PanelDebugLogSink {
+		return (event) => {
+			this.logPtyDebug(
+				event.scope,
+				event.message,
+				event.terminalId,
+				event.data,
+			);
+		};
+	}
+
+	private isPtyDebugEnabled(): boolean {
+		const debugLog = vscode.workspace
+			.getConfiguration("bootty")
+			.get<string>("debugLog", "");
+		return debugLog.trim().length > 0;
+	}
+
+	private async syncPtyDebugWriter(): Promise<void> {
+		const syncToken = ++this.ptyDebugSyncToken;
+		if (this.isPtyDebugEnabled()) {
+			if (!this.ptyDebugWriter && !this.ptyDebugInitInFlight) {
+				this.ptyDebugStartedAt = Date.now();
+				await this.initPtyDebugWriter(syncToken);
+			}
+			return;
+		}
+		if (!this.ptyDebugWriter) return;
+		const writer = this.ptyDebugWriter;
+		this.ptyDebugWriter = undefined;
+		await writer.stop({
+			stoppedAt: new Date().toISOString(),
+			reason: "bootty.debugLog disabled",
+		});
+		this.outputChannel.appendLine("[PTY Debug] Structured logging disabled.");
+	}
+
+	private resolvePtyDebugLogPath(): string {
+		const fileName = `${PTY_DEBUG_FILE_PREFIX}-${crypto.randomUUID()}.jsonl`;
+		return path.join(
+			this.context.logUri.fsPath,
+			PROFILE_OUTPUT_SUBDIR,
+			fileName,
+		);
+	}
+
+	private async initPtyDebugWriter(syncToken: number): Promise<void> {
+		if (this.ptyDebugWriter || this.ptyDebugInitInFlight) return;
+		this.ptyDebugInitInFlight = true;
+		const outputPath = this.resolvePtyDebugLogPath();
+		const writer = new PtyDebugWriter(outputPath);
+		try {
+			await writer.start({
+				startedAt: new Date(this.ptyDebugStartedAt).toISOString(),
+				vscodeVersion: vscode.version,
+				nodeVersion: process.version,
+				platform: process.platform,
+				arch: process.arch,
+			});
+			if (syncToken !== this.ptyDebugSyncToken || !this.isPtyDebugEnabled()) {
+				await writer.stop({
+					stoppedAt: new Date().toISOString(),
+					reason: "bootty.debugLog disabled before logger initialized",
+				});
+				return;
+			}
+			this.ptyDebugWriter = writer;
+			this.outputChannel.appendLine(
+				`[PTY Debug] Writing structured logs to ${outputPath}`,
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.outputChannel.appendLine(
+				`[PTY Debug] Failed to initialize logger: ${message}`,
+			);
+		} finally {
+			this.ptyDebugInitInFlight = false;
+		}
+	}
+
+	private logPtyDebug(
+		scope: PtyDebugScope,
+		message: string,
+		terminalId?: TerminalId,
+		data?: PtyDebugData,
+	): void {
+		if (!this.ptyDebugWriter) return;
+		const ts = Date.now() - this.ptyDebugStartedAt;
+		this.ptyDebugWriter?.append({
+			ts,
+			scope,
+			message,
+			terminalId,
+			data,
+		});
 	}
 
 	/** Get the next available terminal index (reuses freed indices) */
@@ -463,36 +597,65 @@ export class TerminalManager implements vscode.Disposable {
 	}
 
 	/** Type-safe message posting using discriminated union */
-	private postToTerminal(id: TerminalId, message: ExtensionMessage): void {
+	private postToTerminal(
+		id: TerminalId,
+		message: ExtensionMessage,
+		options?: { queueIfUnavailable?: boolean },
+	): boolean {
 		const instance = this.terminals.get(id);
-		// Debug: trace postToTerminal entry
 		if (message.type === "pty-data") {
 			const bytes = message.data.byteLength;
 			if (!instance) {
-				console.log(
-					`[postToTerminal] SKIP: instance not found id=${id} bytes=${bytes}`,
+				this.logPtyDebug(
+					"extension",
+					"post-to-terminal-skip-instance-missing",
+					id,
+					{
+						bytes,
+					},
 				);
-				return;
+				return false;
 			}
 			if (!instance.ready) {
-				console.log(
-					`[postToTerminal] SKIP: instance.ready=false id=${id} bytes=${bytes}`,
-				);
-				return;
+				this.logPtyDebug("extension", "post-to-terminal-skip-not-ready", id, {
+					bytes,
+					location: instance.location,
+				});
+				return false;
 			}
-			console.log(
-				`[postToTerminal] SEND: id=${id} bytes=${bytes} location=${instance.location}`,
-			);
+			this.logPtyDebug("extension", "post-to-terminal-send", id, {
+				bytes,
+				location: instance.location,
+				seq: typeof message.seq === "number" ? message.seq : null,
+				padBytes:
+					typeof message.padBytes === "number" ? message.padBytes : null,
+			});
 		} else {
-			if (!instance || !instance.ready) return;
+			if (!instance || !instance.ready) return false;
 		}
 
 		if (instance.location === "editor") {
 			// TypeScript knows instance.panel exists here
 			instance.panel.webview.postMessage(message);
+			return true;
 		} else {
 			// instance.location === 'panel' - use panel provider
-			this.panelProvider.postMessage(message);
+			return this.panelProvider.postMessage(message, options);
+		}
+	}
+
+	private handlePtyAck(terminalId: TerminalId, seq: number): void {
+		const pending = this.pendingPtyAcks.get(terminalId);
+		if (!pending) return;
+		const entry = pending.get(seq);
+		if (!entry) return;
+		if (entry.timeoutId) {
+			clearTimeout(entry.timeoutId);
+		}
+		pending.delete(seq);
+		if (pending.size === 0) {
+			this.pendingPtyAcks.delete(terminalId);
+			this.drainOrderedPtyDataQueue(terminalId);
 		}
 	}
 
@@ -661,6 +824,26 @@ export class TerminalManager implements vscode.Disposable {
 				? raw.timeoutMs
 				: undefined;
 		return { terminalId, payload, timeoutMs };
+	}
+
+	private parseTestSetPtyDropOptions(input: unknown): TestSetPtyDropOptions {
+		if (!input || typeof input !== "object") {
+			return {};
+		}
+		const raw = input as Record<string, unknown>;
+		const terminalId =
+			typeof raw.terminalId === "string"
+				? (raw.terminalId as TerminalId)
+				: undefined;
+		const dropEvery =
+			typeof raw.dropEvery === "number" && Number.isFinite(raw.dropEvery)
+				? Math.max(0, Math.floor(raw.dropEvery))
+				: undefined;
+		const dropModulo =
+			typeof raw.dropModulo === "number" && Number.isFinite(raw.dropModulo)
+				? Math.max(0, Math.floor(raw.dropModulo))
+				: undefined;
+		return { terminalId, dropEvery, dropModulo };
 	}
 
 	private parseTestFileLinksOptions(input: unknown): TestFileLinksOptions {
@@ -1108,6 +1291,23 @@ export class TerminalManager implements vscode.Disposable {
 			type: "test-dispatch-keys",
 			terminalId,
 			keys: parsed.keys,
+		});
+	}
+
+	setTestPtyDrop(options: unknown = {}): void {
+		const parsed = this.parseTestSetPtyDropOptions(options);
+		const terminalId = this.resolveExistingTerminalId(parsed.terminalId);
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			throw new Error(`Terminal ${terminalId} no longer exists.`);
+		}
+		const dropEvery = parsed.dropEvery ?? 0;
+		const dropModulo = parsed.dropModulo ?? 0;
+		this.postToTerminal(terminalId, {
+			type: "test-set-pty-drop",
+			terminalId,
+			dropEvery,
+			dropModulo,
 		});
 	}
 
@@ -1904,20 +2104,53 @@ export class TerminalManager implements vscode.Disposable {
 	private resolvePtyOutputBatchConfig(): {
 		maxBytes: number;
 		maxDelayMs: number;
+		minBytes: number;
+		maxPendingMs: number;
+		ackMaxBytes: number;
+		ackRetryMs: number;
+		ackMaxAttempts: number;
 	} {
 		const config = vscode.workspace.getConfiguration("bootty");
 		const maxBytes = Math.max(
 			0,
 			Math.floor(config.get<number>("pty.outputBatchMaxBytes") ?? 0),
 		);
-		// Default to 8ms delay to batch rapid echo characters together.
+		const minBytes = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.outputBatchMinBytes") ?? 16),
+		);
+		// Default to 4ms delay to batch rapid echo characters together.
 		// VS Code's webview.postMessage appears to drop rapid small messages
 		// in the Extension Development Host. Batching works around this.
 		const maxDelayMs = Math.max(
 			0,
-			config.get<number>("pty.outputBatchMaxDelayMs") ?? 8,
+			config.get<number>("pty.outputBatchMaxDelayMs") ?? 4,
 		);
-		return { maxBytes, maxDelayMs };
+		const maxPendingMs = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.outputBatchMaxPendingMs") ?? 100),
+		);
+		const ackMaxBytes = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.outputAckMaxBytes") ?? 1024),
+		);
+		const ackRetryMs = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.outputAckRetryMs") ?? 20),
+		);
+		const ackMaxAttempts = Math.max(
+			0,
+			Math.floor(config.get<number>("pty.outputAckMaxAttempts") ?? 5),
+		);
+		return {
+			maxBytes,
+			maxDelayMs,
+			minBytes,
+			maxPendingMs,
+			ackMaxBytes,
+			ackRetryMs,
+			ackMaxAttempts,
+		};
 	}
 
 	private async waitForPanelReady(timeoutMs: number): Promise<void> {
@@ -2654,6 +2887,19 @@ export class TerminalManager implements vscode.Disposable {
 				}
 				break;
 			}
+			case "pty-ack": {
+				this.handlePtyAck(message.terminalId, message.seq);
+				break;
+			}
+			case "pty-debug-log": {
+				this.logPtyDebug(
+					message.scope,
+					message.message,
+					message.terminalId,
+					message.data,
+				);
+				break;
+			}
 			case "test-start-pipeline-trace": {
 				void this.startPipelineTrace(message.terminalId)
 					.then((tracePath) => {
@@ -2831,6 +3077,186 @@ export class TerminalManager implements vscode.Disposable {
 		return Buffer.from(data, "utf8");
 	}
 
+	private nextPtySeq(instance: TerminalInstance): number {
+		if (typeof instance.ptySeq !== "number") {
+			instance.ptySeq = 0;
+		}
+		const next = instance.ptySeq;
+		instance.ptySeq += 1;
+		return next;
+	}
+
+	private buildPtyDataMessage(
+		instance: TerminalInstance,
+		data: Uint8Array,
+		seq: number,
+	): ExtensionMessage {
+		const { minBytes } = this.ptyOutputBatchConfig;
+		if (minBytes > 0 && data.byteLength > 0 && data.byteLength < minBytes) {
+			const padBytes = minBytes - data.byteLength;
+			const padded = new Uint8Array(data.byteLength + padBytes);
+			padded.set(data, 0);
+			return {
+				type: "pty-data",
+				terminalId: instance.id,
+				data: padded,
+				padBytes,
+				seq,
+			};
+		}
+		return { type: "pty-data", terminalId: instance.id, data, seq };
+	}
+
+	private shouldDuplicatePtyMessage(payloadBytes: number): boolean {
+		const { minBytes } = this.ptyOutputBatchConfig;
+		if (minBytes <= 0) return false;
+		const duplicateThreshold = minBytes * 4;
+		return payloadBytes > 0 && payloadBytes < duplicateThreshold;
+	}
+
+	private shouldAckPtyMessage(payloadBytes: number): boolean {
+		const { ackMaxBytes, ackRetryMs, ackMaxAttempts } =
+			this.ptyOutputBatchConfig;
+		if (ackMaxBytes <= 0) return false;
+		if (ackRetryMs <= 0 || ackMaxAttempts <= 0) return false;
+		return payloadBytes > 0 && payloadBytes <= ackMaxBytes;
+	}
+
+	private hasPendingPtyAck(terminalId: TerminalId): boolean {
+		const pending = this.pendingPtyAcks.get(terminalId);
+		return Boolean(pending && pending.size > 0);
+	}
+
+	private enqueueOrderedPtyData(
+		terminalId: TerminalId,
+		payload: Uint8Array,
+	): void {
+		let queue = this.pendingOrderedPtyData.get(terminalId);
+		if (!queue) {
+			queue = [];
+			this.pendingOrderedPtyData.set(terminalId, queue);
+		}
+		queue.push(payload);
+	}
+
+	private drainOrderedPtyDataQueue(terminalId: TerminalId): void {
+		const instance = this.terminals.get(terminalId);
+		if (!instance) {
+			this.pendingOrderedPtyData.delete(terminalId);
+			return;
+		}
+		if (this.hasPendingPtyAck(terminalId)) return;
+		const queue = this.pendingOrderedPtyData.get(terminalId);
+		if (!queue || queue.length === 0) {
+			this.pendingOrderedPtyData.delete(terminalId);
+			return;
+		}
+		while (queue.length > 0) {
+			const payload = queue.shift();
+			if (!payload) continue;
+			this.postPtyData(instance, payload);
+			// Preserve stream ordering: stop as soon as a sent chunk is waiting for ack.
+			if (this.hasPendingPtyAck(terminalId)) break;
+		}
+		if (queue.length === 0) {
+			this.pendingOrderedPtyData.delete(terminalId);
+		}
+	}
+
+	private postOrQueuePtyData(
+		instance: TerminalInstance,
+		data: Uint8Array,
+	): void {
+		if (this.hasPendingPtyAck(instance.id)) {
+			this.enqueueOrderedPtyData(instance.id, data);
+			return;
+		}
+		this.postPtyData(instance, data);
+	}
+
+	private sendPtyMessage(
+		instance: TerminalInstance,
+		message: ExtensionMessage,
+		payloadBytes: number,
+		options?: { queueIfUnavailable?: boolean },
+	): boolean {
+		const delivered = this.postToTerminal(instance.id, message, options);
+		if (delivered && this.shouldDuplicatePtyMessage(payloadBytes)) {
+			this.postToTerminal(instance.id, message);
+		}
+		return delivered;
+	}
+
+	private schedulePtyAckRetry(
+		instance: TerminalInstance,
+		pending: PendingPtyAck,
+	): void {
+		const { ackRetryMs, ackMaxAttempts } = this.ptyOutputBatchConfig;
+		pending.timeoutId = setTimeout(() => {
+			const map = this.pendingPtyAcks.get(instance.id);
+			const entry = map?.get(pending.seq);
+			if (!entry) return;
+			if (!this.terminals.has(instance.id)) {
+				map?.delete(pending.seq);
+				return;
+			}
+			if (entry.attempts >= ackMaxAttempts) {
+				map?.delete(pending.seq);
+				if (map && map.size === 0) {
+					this.pendingPtyAcks.delete(instance.id);
+					this.drainOrderedPtyDataQueue(instance.id);
+				}
+				return;
+			}
+			const delivered = this.sendPtyMessage(
+				instance,
+				entry.message,
+				entry.payloadBytes,
+				{ queueIfUnavailable: true },
+			);
+			if (!delivered) {
+				entry.attempts += 1;
+				this.schedulePtyAckRetry(instance, entry);
+				return;
+			}
+			entry.attempts += 1;
+			this.schedulePtyAckRetry(instance, entry);
+		}, ackRetryMs);
+	}
+
+	private trackPtyAck(
+		instance: TerminalInstance,
+		message: ExtensionMessage,
+		payloadBytes: number,
+	): void {
+		if (!this.shouldAckPtyMessage(payloadBytes)) return;
+		if (message.type !== "pty-data" || typeof message.seq !== "number") {
+			return;
+		}
+		let map = this.pendingPtyAcks.get(instance.id);
+		if (!map) {
+			map = new Map();
+			this.pendingPtyAcks.set(instance.id, map);
+		}
+		if (map.has(message.seq)) return;
+		const pending: PendingPtyAck = {
+			seq: message.seq,
+			message,
+			payloadBytes,
+			attempts: 1,
+		};
+		map.set(message.seq, pending);
+		this.schedulePtyAckRetry(instance, pending);
+	}
+
+	private postPtyData(instance: TerminalInstance, data: Uint8Array): void {
+		const seq = this.nextPtySeq(instance);
+		const message = this.buildPtyDataMessage(instance, data, seq);
+		const delivered = this.sendPtyMessage(instance, message, data.byteLength);
+		if (!delivered) return;
+		this.trackPtyAck(instance, message, data.byteLength);
+	}
+
 	private concatPtyChunks(
 		chunks: Uint8Array[],
 		totalBytes: number,
@@ -2849,20 +3275,22 @@ export class TerminalManager implements vscode.Disposable {
 	}
 
 	private enqueuePtyOutput(instance: TerminalInstance, data: Uint8Array): void {
-		const { maxBytes, maxDelayMs } = this.ptyOutputBatchConfig;
-		// Debug: log batch config on first call
+		const { maxBytes, maxDelayMs, minBytes, maxPendingMs } =
+			this.ptyOutputBatchConfig;
 		if (!this._batchConfigLogged) {
 			this._batchConfigLogged = true;
-			console.log(
-				`[enqueuePtyOutput] maxBytes=${maxBytes} maxDelayMs=${maxDelayMs}`,
-			);
+			this.logPtyDebug("extension", "enqueue-pty-output-config", instance.id, {
+				maxBytes,
+				maxDelayMs,
+				minBytes,
+				maxPendingMs,
+				ackMaxBytes: this.ptyOutputBatchConfig.ackMaxBytes,
+				ackRetryMs: this.ptyOutputBatchConfig.ackRetryMs,
+				ackMaxAttempts: this.ptyOutputBatchConfig.ackMaxAttempts,
+			});
 		}
 		if (maxBytes <= 0 && maxDelayMs <= 0) {
-			this.postToTerminal(instance.id, {
-				type: "pty-data",
-				terminalId: instance.id,
-				data,
-			});
+			this.postOrQueuePtyData(instance, data);
 			return;
 		}
 		if (!instance.outputBuffer) {
@@ -2910,13 +3338,14 @@ export class TerminalManager implements vscode.Disposable {
 
 	/**
 	 * Attempt to flush the PTY output buffer, but reschedule if the batch
-	 * is too small (< MIN_BATCH_BYTES).
+	 * is too small (< minBytes) and the max pending cap has not been reached.
 	 * This prevents VS Code's webview.postMessage from dropping tiny messages.
 	 *
-	 * IMPORTANT: We NEVER force-flush small batches. They accumulate until:
-	 * 1. More data arrives and reaches MIN_BATCH_BYTES
+	 * Small batches accumulate until:
+	 * 1. More data arrives and reaches minBytes
 	 * 2. A large chunk (command output) arrives and batches with pending data
-	 * 3. The terminal closes
+	 * 3. The max pending cap is reached (if configured)
+	 * 4. The terminal closes
 	 */
 	private tryFlushPtyOutputBuffer(
 		instance: TerminalInstance,
@@ -2925,18 +3354,29 @@ export class TerminalManager implements vscode.Disposable {
 		const buffer = instance.outputBuffer;
 		if (!buffer || buffer.bytes === 0) return;
 
+		const { minBytes, maxPendingMs } = this.ptyOutputBatchConfig;
 		// Minimum batch size to prevent message drops.
 		// VS Code's webview.postMessage drops small rapid messages.
-		// NEVER flush less than this - the message WILL be dropped.
-		const MIN_BATCH_BYTES = 4;
+		// Set minBytes to 0 to disable size-based gating.
+		const minBatchBytes = Math.max(0, minBytes);
 
 		// Only flush if we have enough bytes to survive postMessage.
-		if (buffer.bytes >= MIN_BATCH_BYTES) {
+		if (minBatchBytes <= 0 || buffer.bytes >= minBatchBytes) {
 			this.flushPtyOutputBuffer(instance);
 			return;
 		}
 
-		// Not enough bytes yet - keep waiting indefinitely.
+		const firstByteTime =
+			typeof buffer.firstByteTime === "number"
+				? buffer.firstByteTime
+				: Date.now();
+		const pendingMs = Date.now() - firstByteTime;
+		if (maxPendingMs > 0 && pendingMs >= maxPendingMs) {
+			this.flushPtyOutputBuffer(instance);
+			return;
+		}
+
+		// Not enough bytes yet - keep waiting.
 		// The data will eventually batch with:
 		// - More keystrokes from the user
 		// - Command output from the shell (when user presses Enter)
@@ -2982,11 +3422,7 @@ export class TerminalManager implements vscode.Disposable {
 			);
 			return;
 		}
-		this.postToTerminal(instance.id, {
-			type: "pty-data",
-			terminalId: instance.id,
-			data: payload,
-		});
+		this.postOrQueuePtyData(instance, payload);
 	}
 
 	private flushQueuedPtyData(instance: TerminalInstance): void {
@@ -2997,11 +3433,7 @@ export class TerminalManager implements vscode.Disposable {
 		const flushPending = () => {
 			if (pendingBytes === 0) return;
 			const payload = this.concatPtyChunks(pendingChunks, pendingBytes);
-			this.postToTerminal(instance.id, {
-				type: "pty-data",
-				terminalId: instance.id,
-				data: payload,
-			});
+			this.enqueuePtyOutput(instance, payload);
 			pendingChunks = [];
 			pendingBytes = 0;
 		};
@@ -3617,8 +4049,28 @@ export class TerminalManager implements vscode.Disposable {
 			config.get<number>("pty.outputBatchMaxBytes"),
 		);
 		captureConfig(
+			"pty.outputBatchMinBytes",
+			config.get<number>("pty.outputBatchMinBytes"),
+		);
+		captureConfig(
 			"pty.outputBatchMaxDelayMs",
 			config.get<number>("pty.outputBatchMaxDelayMs"),
+		);
+		captureConfig(
+			"pty.outputBatchMaxPendingMs",
+			config.get<number>("pty.outputBatchMaxPendingMs"),
+		);
+		captureConfig(
+			"pty.outputAckMaxBytes",
+			config.get<number>("pty.outputAckMaxBytes"),
+		);
+		captureConfig(
+			"pty.outputAckRetryMs",
+			config.get<number>("pty.outputAckRetryMs"),
+		);
+		captureConfig(
+			"pty.outputAckMaxAttempts",
+			config.get<number>("pty.outputAckMaxAttempts"),
 		);
 		const configEvent: ProfileEvent = {
 			name: "bootty:extension:runtime-config",
@@ -3933,6 +4385,16 @@ export class TerminalManager implements vscode.Disposable {
 			instance.outputBuffer.flushTimer = undefined;
 		}
 		instance.outputBuffer = undefined;
+		const pendingAcks = this.pendingPtyAcks.get(id);
+		if (pendingAcks) {
+			for (const pending of pendingAcks.values()) {
+				if (pending.timeoutId) {
+					clearTimeout(pending.timeoutId);
+				}
+			}
+			this.pendingPtyAcks.delete(id);
+		}
+		this.pendingOrderedPtyData.delete(id);
 
 		// Kill PTY process (safe to call if already dead)
 		this.ptyService.kill(id);
@@ -4797,6 +5259,13 @@ export class TerminalManager implements vscode.Disposable {
 		// Close PTY capture stream if open
 		if (this.ptyCaptureEnabled) {
 			this.stopPtyCapture();
+		}
+
+		if (this.ptyDebugWriter) {
+			void this.ptyDebugWriter.stop({
+				stoppedAt: new Date().toISOString(),
+			});
+			this.ptyDebugWriter = undefined;
 		}
 
 		this.outputChannel.dispose();

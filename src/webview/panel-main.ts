@@ -18,6 +18,7 @@ import { WebGLRenderer } from "@0xbigboss/libghostty-webgl";
 const logWebgl = debug("bootty:panel:webgl");
 const logPty = debug("bootty:panel:pty");
 const logInput = debug("bootty:panel:input");
+const PTY_SEQ_DEDUPE_HISTORY = 4096;
 
 const utf8Decoder = new TextDecoder("utf-8");
 function previewBytes(bytes: Uint8Array, limit = 256): string {
@@ -235,8 +236,7 @@ import type {
 import type { TerminalId } from "../types/terminal";
 import { ContextMenu } from "./context-menu";
 import { createProfileCollector } from "./profile-collector";
-import type { RendererResult } from "./renderer-utils";
-import { createRenderer } from "./renderer-utils";
+import { RendererBackendController } from "./renderer-utils";
 import {
 	createSearchController,
 	type SearchController,
@@ -264,6 +264,7 @@ interface PanelTerminal {
 	id: TerminalId;
 	title: string;
 	term: unknown; // ghostty-web Terminal instance
+	rendererController: RendererBackendController;
 	fitAddon: unknown; // FitAddon instance
 	container: HTMLElement;
 	currentCwd?: string;
@@ -293,6 +294,21 @@ const boottyPanelInit = async (): Promise<void> => {
 		source: "panel",
 		postMessage: (message) => vscode.postMessage(message),
 	});
+	let ptyDebugEnabled = Boolean(storedDebug && storedDebug.trim().length > 0);
+	function postPtyDebug(
+		message: string,
+		terminalId?: TerminalId,
+		data?: Record<string, string | number | boolean | null>,
+	): void {
+		if (!ptyDebugEnabled) return;
+		vscode.postMessage({
+			type: "pty-debug-log",
+			scope: "webview-panel",
+			terminalId,
+			message,
+			data,
+		} satisfies PanelWebviewMessage);
+	}
 
 	// Restore persisted state
 	const savedState = vscode.getState() as WebviewState | undefined;
@@ -334,8 +350,14 @@ const boottyPanelInit = async (): Promise<void> => {
 			mergeScheduled: boolean;
 			mergeChunks: Uint8Array[];
 			mergeBytes: number;
+			seenSeqOrder: number[];
+			seenSeqs: Set<number>;
 			suppressPty: boolean;
 		}
+	>();
+	const ptyDropState = new Map<
+		TerminalId,
+		{ dropEvery: number; dropModulo: number; counter: number }
 	>();
 	const pipelineTraceActive = new Map<
 		TerminalId,
@@ -710,6 +732,8 @@ const boottyPanelInit = async (): Promise<void> => {
 		mergeScheduled: boolean;
 		mergeChunks: Uint8Array[];
 		mergeBytes: number;
+		seenSeqOrder: number[];
+		seenSeqs: Set<number>;
 		suppressPty: boolean;
 	} {
 		let state = ptyQueueState.get(id);
@@ -727,11 +751,38 @@ const boottyPanelInit = async (): Promise<void> => {
 				mergeScheduled: false,
 				mergeChunks: [],
 				mergeBytes: 0,
+				seenSeqOrder: [],
+				seenSeqs: new Set<number>(),
 				suppressPty: false,
 			};
 			ptyQueueState.set(id, state);
 		}
 		return state;
+	}
+
+	function shouldDropPtyMessage(terminalId: TerminalId): boolean {
+		const state = ptyDropState.get(terminalId);
+		if (!state || state.dropEvery <= 0) return false;
+		state.counter += 1;
+		const modulo = state.dropModulo ?? 0;
+		return (state.counter + modulo) % state.dropEvery === 0;
+	}
+
+	function isDuplicatePtySeq(
+		state: ReturnType<typeof getPtyQueueState>,
+		seq: number | undefined,
+	): boolean {
+		if (typeof seq !== "number") return false;
+		if (state.seenSeqs.has(seq)) return true;
+		state.seenSeqs.add(seq);
+		state.seenSeqOrder.push(seq);
+		if (state.seenSeqOrder.length > PTY_SEQ_DEDUPE_HISTORY) {
+			const oldestSeq = state.seenSeqOrder.shift();
+			if (typeof oldestSeq === "number") {
+				state.seenSeqs.delete(oldestSeq);
+			}
+		}
+		return false;
 	}
 
 	type PtyQueueState = ReturnType<typeof getPtyQueueState>;
@@ -1493,51 +1544,53 @@ const boottyPanelInit = async (): Promise<void> => {
 		wrapper.appendChild(container);
 		terminalsContainer.appendChild(wrapper);
 
-		// Create renderer based on current runtime config (reflects latest setting value)
-		let rendererResult: RendererResult;
-		try {
-			rendererResult = createRenderer(
-				runtimeConfig.renderer,
-				() =>
-					new WebGLRenderer({
-						onContextLoss: () => {
-							// WebGL context lost after repeated failures - renderer is degraded
-							// Note: The terminal still uses the WebGL renderer (no runtime swap),
-							// but it's no longer rendering. Report accurate status.
-							console.warn(
-								`[bootty] WebGL context lost for terminal ${id} - renderer degraded`,
-							);
-							const existingInfo = rendererInfo.get(id);
-							rendererInfo.set(id, {
-								type: existingInfo?.type ?? "webgl", // Keep actual type
-								status: "degraded",
-								fallback: existingInfo?.fallback ?? false,
-								reason: "WebGL context lost after repeated failures",
-							});
-							vscode.postMessage({
-								type: "renderer-status",
-								terminalId: id,
-								renderer: existingInfo?.type ?? ("webgl" as RendererType),
-								status: "degraded",
-								fallback: existingInfo?.fallback ?? false,
-								reason: "WebGL context lost after repeated failures",
-							});
-						},
-					}),
-			);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			console.warn(
-				`[bootty] WebGL renderer init failed for terminal ${id}:`,
-				message,
-			);
-			rendererResult = {
-				renderer: undefined,
-				type: "canvas",
-				fallback: true,
-				reason: `WebGL renderer init failed: ${message}`,
-			};
-		}
+		const rendererController = new RendererBackendController({
+			mode: runtimeConfig.renderer,
+			createWebglRenderer: (onContextLoss) =>
+				new WebGLRenderer({
+					onContextLoss,
+				}),
+			onStatusChange: (state) => {
+				rendererInfo.set(id, {
+					type: state.type,
+					status: state.status,
+					fallback: state.fallback,
+					reason: state.reason,
+				});
+				vscode.postMessage({
+					type: "renderer-status",
+					terminalId: id,
+					renderer: state.type,
+					status: state.status,
+					fallback: state.fallback,
+					reason: state.reason,
+				});
+			},
+		});
+
+		const rendererResult = (() => {
+			try {
+				return rendererController.initialize();
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				if (runtimeConfig.renderer === "webgl") {
+					wrapper.remove();
+					throw new Error(
+						`WebGL renderer init failed for terminal ${id}: ${message}`,
+					);
+				}
+				console.warn(
+					`[bootty] WebGL renderer init failed for terminal ${id}:`,
+					message,
+				);
+				return {
+					renderer: undefined,
+					type: "canvas" as RendererType,
+					fallback: true,
+					reason: `WebGL renderer init failed: ${message}`,
+				};
+			}
+		})();
 
 		// Track renderer info for this terminal
 		rendererInfo.set(id, {
@@ -1607,6 +1660,11 @@ const boottyPanelInit = async (): Promise<void> => {
 			termOptions.renderer?.constructor?.name,
 		);
 		const term = new Terminal(termOptions);
+		rendererController.bindHost(
+			term as unknown as {
+				setRenderer?: (renderer?: unknown) => void;
+			},
+		);
 
 		const fitAddon = new FitAddon();
 		term.loadAddon(fitAddon);
@@ -1874,6 +1932,7 @@ const boottyPanelInit = async (): Promise<void> => {
 			id,
 			title,
 			term,
+			rendererController,
 			fitAddon,
 			container: wrapper,
 			searchController,
@@ -2074,6 +2133,7 @@ const boottyPanelInit = async (): Promise<void> => {
 		scrollOffsets.delete(id);
 		terminals.delete(id);
 		ptyQueueState.delete(id);
+		ptyDropState.delete(id);
 		scrollRafState.delete(id);
 
 		// Activate another terminal if this was active
@@ -2147,14 +2207,34 @@ const boottyPanelInit = async (): Promise<void> => {
 
 		// Debug: log every message received by webview
 		if (msg.type === "pty-data") {
-			console.log(
-				`[webview-recv] type=pty-data terminalId=${msg.terminalId} bytes=${msg.data?.byteLength ?? 0}`,
-			);
+			const trimmed = msg.padBytes
+				? msg.data.subarray(0, Math.max(0, msg.data.byteLength - msg.padBytes))
+				: msg.data;
+			postPtyDebug("webview-recv", msg.terminalId, {
+				bytes: trimmed.byteLength,
+				seq: typeof msg.seq === "number" ? msg.seq : null,
+				padBytes: typeof msg.padBytes === "number" ? msg.padBytes : null,
+			});
 		}
 
 		switch (msg.type) {
 			case "add-tab": {
-				const terminal = createTerminal(msg.terminalId, msg.title);
+				let terminal: PanelTerminal;
+				try {
+					terminal = createTerminal(msg.terminalId, msg.title);
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : String(error);
+					const stack = error instanceof Error ? error.stack : undefined;
+					vscode.postMessage({
+						type: "webview-error",
+						scope: "panel",
+						terminalId: msg.terminalId,
+						message,
+						stack,
+					} satisfies PanelWebviewMessage);
+					break;
+				}
 				// Add to terminal list UI
 				const listItem: TerminalListItem = {
 					id: msg.terminalId,
@@ -2450,21 +2530,56 @@ const boottyPanelInit = async (): Promise<void> => {
 				dispatchTestKeyEvents(msg.terminalId, msg.keys);
 				break;
 			}
+			case "test-set-pty-drop": {
+				const dropEvery =
+					typeof msg.dropEvery === "number" && Number.isFinite(msg.dropEvery)
+						? Math.max(0, Math.floor(msg.dropEvery))
+						: 0;
+				const dropModulo =
+					typeof msg.dropModulo === "number" && Number.isFinite(msg.dropModulo)
+						? Math.max(0, Math.floor(msg.dropModulo))
+						: 0;
+				ptyDropState.set(msg.terminalId, {
+					dropEvery,
+					dropModulo,
+					counter: 0,
+				});
+				const state = getPtyQueueState(msg.terminalId);
+				state.seenSeqOrder.length = 0;
+				state.seenSeqs.clear();
+				break;
+			}
 
 			case "pty-data": {
 				const terminal = terminals.get(msg.terminalId);
 				if (terminal) {
-					if (msg.data.byteLength > 0) {
+					if (shouldDropPtyMessage(msg.terminalId)) break;
+					const state = getPtyQueueState(msg.terminalId);
+					const isDuplicate = isDuplicatePtySeq(state, msg.seq);
+					if (typeof msg.seq === "number") {
+						vscode.postMessage({
+							type: "pty-ack",
+							terminalId: msg.terminalId,
+							seq: msg.seq,
+						});
+					}
+					if (isDuplicate) break;
+					const data = msg.padBytes
+						? msg.data.subarray(
+								0,
+								Math.max(0, msg.data.byteLength - msg.padBytes),
+							)
+						: msg.data;
+					if (data.byteLength > 0) {
 						tracePipelineEvent(
 							msg.terminalId,
 							"webview-recv",
-							msg.data.byteLength,
-							msg.data,
+							data.byteLength,
+							data,
 						);
-						const state = getPtyQueueState(msg.terminalId);
 						if (state.suppressPty) break;
-						state.mergeChunks.push(msg.data);
-						state.mergeBytes += msg.data.byteLength;
+						state.mergeChunks.push(data);
+						state.mergeBytes += data.byteLength;
 						if (!state.mergeScheduled) {
 							const terminalId = msg.terminalId;
 							state.mergeScheduled = true;
@@ -2493,6 +2608,10 @@ const boottyPanelInit = async (): Promise<void> => {
 					state.mergeScheduled = false;
 					state.drainInFlight = false;
 					state.drainQueued = false;
+					const dropState = ptyDropState.get(msg.terminalId);
+					if (dropState) {
+						dropState.counter = 0;
+					}
 					const term = terminal.term as unknown as {
 						write: (data: string | Uint8Array) => void;
 						getViewportY?: () => number;
@@ -2619,9 +2738,11 @@ const boottyPanelInit = async (): Promise<void> => {
 				runtimeConfigUpdated = true;
 				// Enable/disable debug logging dynamically
 				// Note: localStorage is also set for persistence across reloads
-				if (msg.config.debugLog) {
-					localStorage.setItem("debug", msg.config.debugLog);
-					debug.enable(msg.config.debugLog);
+				const debugLog = msg.config.debugLog.trim();
+				ptyDebugEnabled = debugLog.length > 0;
+				if (ptyDebugEnabled) {
+					localStorage.setItem("debug", debugLog);
+					debug.enable(debugLog);
 				} else {
 					localStorage.removeItem("debug");
 					debug.disable();

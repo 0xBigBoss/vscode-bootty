@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import type {
 	PanelExtensionMessage,
 	PanelWebviewMessage,
+	PtyDebugData,
 } from "./types/messages";
 import type { TerminalId } from "./types/terminal";
 
@@ -19,6 +20,12 @@ function escapeHtmlAttr(str: string): string {
 
 /** Callback for routing messages from panel webview to terminal manager */
 export type PanelMessageHandler = (message: PanelWebviewMessage) => void;
+export type PanelDebugLogSink = (event: {
+	scope: "panel-provider";
+	message: string;
+	terminalId?: TerminalId;
+	data?: PtyDebugData;
+}) => void;
 
 /**
  * WebviewViewProvider for the BooTTY terminal panel in the bottom area.
@@ -31,6 +38,7 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	private _isReady = false; // True after panel-ready received
 	private _messageQueue: PanelExtensionMessage[] = []; // Queue for messages before ready
 	private _messageHandler?: PanelMessageHandler;
+	private _debugLogSink?: PanelDebugLogSink;
 	private _disposables: vscode.Disposable[] = [];
 
 	constructor(private readonly _extensionUri: vscode.Uri) {}
@@ -38,6 +46,10 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	/** Set the message handler for routing messages to terminal manager */
 	setMessageHandler(handler: PanelMessageHandler): void {
 		this._messageHandler = handler;
+	}
+
+	setDebugLogSink(sink: PanelDebugLogSink): void {
+		this._debugLogSink = sink;
 	}
 
 	/** Called by VS Code when the panel view is opened */
@@ -130,7 +142,11 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** Post a message to the panel webview */
-	postMessage(message: PanelExtensionMessage): void {
+	postMessage(
+		message: PanelExtensionMessage,
+		options?: { queueIfUnavailable?: boolean },
+	): boolean {
+		const queueIfUnavailable = options?.queueIfUnavailable ?? true;
 		const isTestMessage =
 			typeof message.type === "string" && message.type.startsWith("test-");
 		// PTY data/exit messages must be delivered immediately regardless of visibility
@@ -144,21 +160,33 @@ export class BooTTYPanelViewProvider implements vscode.WebviewViewProvider {
 			(this._view.visible || sendImmediately)
 		) {
 			this._view.webview.postMessage(message);
-			// Debug: log pty-data posts
-			if (message.type === "pty-data") {
-				console.log(
-					`[panel-post] terminalId=${message.terminalId} bytes=${message.data.byteLength}`,
-				);
-			}
+			this.logPtyMessage("panel-post", message);
+			return true;
 		} else {
-			this._messageQueue.push(message);
-			// Debug: log when pty-data is queued instead of sent
-			if (message.type === "pty-data") {
-				console.log(
-					`[panel-queued] terminalId=${message.terminalId} bytes=${message.data.byteLength} isReady=${this._isReady} hasView=${!!this._view} visible=${this._view?.visible}`,
-				);
+			if (queueIfUnavailable) {
+				this._messageQueue.push(message);
+				this.logPtyMessage("panel-queued", message);
 			}
+			return false;
 		}
+	}
+
+	private logPtyMessage(
+		messageName: "panel-post" | "panel-queued",
+		message: PanelExtensionMessage,
+	): void {
+		if (message.type !== "pty-data") return;
+		this._debugLogSink?.({
+			scope: "panel-provider",
+			message: messageName,
+			terminalId: message.terminalId,
+			data: {
+				bytes: message.data.byteLength,
+				isReady: this._isReady,
+				hasView: Boolean(this._view),
+				visible: Boolean(this._view?.visible),
+			},
+		});
 	}
 
 	/** Add a terminal tab to the panel */

@@ -36,7 +36,14 @@ export function resolveConfig(
 
 /** Buffer size limits */
 export const MAX_DATA_QUEUE_SIZE = 1000; // Max buffered chunks
-export const READY_TIMEOUT_MS = 10000; // 10s timeout for terminal-ready
+const READY_TIMEOUT_OVERRIDE = Number.parseInt(
+	process.env.BOOTTY_READY_TIMEOUT_MS ?? "",
+	10,
+);
+export const READY_TIMEOUT_MS =
+	Number.isFinite(READY_TIMEOUT_OVERRIDE) && READY_TIMEOUT_OVERRIDE > 0
+		? READY_TIMEOUT_OVERRIDE
+		: 10000; // 10s timeout for terminal-ready
 export const EXIT_CLOSE_DELAY_MS = 1500; // Delay before closing panel after PTY exit
 
 type BenchmarkMode = "pty" | "direct" | "command";
